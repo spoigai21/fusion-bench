@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""The chart: median time per version, with torch.softmax and torch.compile as
+reference lines. Reads results/summary.csv, writes results/plots/.
+
+Light and dark versions are both rendered, because the README is read in both themes
+on GitHub and an automatic flip of a light chart is not a dark chart.
+
+    python bench/plot.py
+    python bench/plot.py --summary results/summary.csv --outdir results/plots
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import matplotlib  # noqa: E402
+
+matplotlib.use("Agg")
+import matplotlib.patheffects as pe  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+
+LADDER = ["v0", "v1", "v2"]
+LADDER_LABELS = {
+    "v0": "v0  naive\n3 global passes",
+    "v1": "v1  fused\nshared memory",
+    "v2": "v2  online\nwarp shuffle + float4",
+}
+# Drawn as reference lines rather than bars: they are the bar to clear, not rungs.
+# Distinct dash patterns as well as distinct hues, so identity never rests on color.
+REFS = [
+    ("torch_softmax", "torch.softmax (ATen fused)", (0, (6, 3))),
+    ("torch_compile", "torch.compile", (0, (2, 2))),
+]
+
+# Validated categorical slots 1-3 (see the dataviz palette reference); both modes are
+# selected, not flipped. Slot 1 carries the kernels, 2 and 3 the two torch references.
+THEME = {
+    "light": dict(surface="#fcfcfb", ink="#0b0b0b", ink2="#52514e", muted="#898781",
+                  grid="#e1e0d9", axis="#c3c2b7",
+                  series=("#2a78d6", "#eb6834", "#1baf7a")),
+    "dark": dict(surface="#1a1a19", ink="#ffffff", ink2="#c3c2b7", muted="#898781",
+                 grid="#2c2c2a", axis="#383835",
+                 series=("#3987e5", "#d95926", "#199e70")),
+}
+
+
+def load_summary(path: Path) -> dict[tuple[int, int], dict[str, float]]:
+    lines = [ln for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    data: dict[tuple[int, int], dict[str, float]] = {}
+    for r in csv.DictReader(lines):
+        if not r.get("median_us"):
+            continue
+        data.setdefault((int(r["n"]), int(r["d"])), {})[r["kernel"]] = float(r["median_us"])
+    return data
+
+
+def draw(data, mode: str, out: Path) -> Path:
+    c = THEME[mode]
+    shapes = sorted(data.keys())
+    fig, axes = plt.subplots(
+        1, len(shapes), figsize=(5.6 * len(shapes), 4.0), facecolor=c["surface"]
+    )
+    if len(shapes) == 1:
+        axes = [axes]
+
+    for ax, shape in zip(axes, shapes):
+        n, d = shape
+        times = data[shape]
+        vals = [times.get(k, 0.0) for k in LADDER]
+        ypos = list(range(len(LADDER)))[::-1]  # v0 at the top, the ladder reads downward
+
+        ax.set_facecolor(c["surface"])
+        ax.barh(ypos, vals, height=0.42, color=c["series"][0], zorder=3)
+
+        # Direct labels: 3 marks, so every bar gets its value. Text wears ink tokens,
+        # never the series color.
+        span = max(vals + [t for k, _, _ in REFS if (t := times.get(k))]) or 1.0
+        for y, k, v in zip(ypos, LADDER, vals):
+            label = f"{v:,.0f} µs"
+            if times.get("v0") and k != "v0":
+                label += f"   {times['v0'] / v:.2f}× v0"
+            # A halo in the surface colour keeps the label legible where it crosses
+            # a reference line.
+            ax.text(v + span * 0.02, y, label, va="center", ha="left",
+                    color=c["ink"], fontsize=9.5, zorder=5,
+                    path_effects=[pe.withStroke(linewidth=3.5, foreground=c["surface"])])
+
+        for i, (key, label, dashes) in enumerate(REFS):
+            t = times.get(key)
+            if not t:
+                continue
+            ax.axvline(t, color=c["series"][i + 1], linewidth=2, linestyle=dashes,
+                       zorder=2, label=label)
+
+        ax.set_yticks(ypos)
+        ax.set_yticklabels([LADDER_LABELS[k] for k in LADDER], fontsize=9, color=c["ink2"])
+        ax.tick_params(axis="x", colors=c["muted"], labelsize=9)
+        ax.tick_params(axis="y", length=0)
+        ax.set_xlim(0, span * 1.32)
+        ax.set_xlabel("median time (µs) — lower is better", color=c["muted"], fontsize=9)
+        ax.set_title(f"{n}×{d}   ({n * d * 4 / 1e6:.1f} MB input)",
+                     color=c["ink"], fontsize=11, pad=10, loc="left")
+
+        ax.grid(axis="x", color=c["grid"], linewidth=0.8, zorder=0)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(c["axis"])
+            ax.spines[side].set_linewidth(1.0)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        leg = fig.legend(handles, labels, loc="lower center", ncol=len(handles),
+                         frameon=False, fontsize=9.5, bbox_to_anchor=(0.5, -0.01))
+        for text in leg.get_texts():
+            text.set_color(c["ink2"])
+
+    fig.suptitle("Softmax kernel ladder — median time per version",
+                 color=c["ink"], fontsize=13, x=0.012, ha="left", y=0.99)
+    fig.tight_layout(rect=(0, 0.06, 1, 0.94))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=200, facecolor=c["surface"], bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--summary", default=str(ROOT / "results" / "summary.csv"))
+    ap.add_argument("--outdir", default=str(ROOT / "results" / "plots"))
+    args = ap.parse_args()
+
+    path = Path(args.summary)
+    if not path.exists():
+        raise SystemExit(f"{path} not found -- run bench/run_all.py first")
+
+    data = load_summary(path)
+    if not data:
+        raise SystemExit(f"{path} has no timed rows")
+
+    outdir = Path(args.outdir)
+    for mode in ("light", "dark"):
+        suffix = "" if mode == "light" else "_dark"
+        out = draw(data, mode, outdir / f"time{suffix}.png")
+        print(f"wrote {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
