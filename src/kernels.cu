@@ -18,6 +18,7 @@
 //     grid-stride loop over rows.
 
 #include <cuda_runtime.h>
+#include <math.h>
 #include <stdint.h>
 
 #include "softmax.h"
@@ -308,7 +309,7 @@ __global__ void softmax_v2_gen_kernel(const float* __restrict__ x, float* __rest
 // v2's vector path needs the row base pointer 16B-aligned and the row length a multiple
 // of 4. Rows start at row * D * 4 bytes from the base, so D % 4 == 0 makes every row
 // aligned if the base is.
-__device__ __host__ inline bool v2_vec_eligible(const void* p, int D) {
+inline bool v2_vec_eligible(const void* p, int D) {
   return (D % 4 == 0) && ((uintptr_t)p % 16 == 0);
 }
 
@@ -356,6 +357,8 @@ cudaError_t launch_softmax_v1(const float* x, float* y, int N, int D, cudaStream
   // opt-in is sticky and monotonic, so it is done once per largest-D-seen rather than
   // on every launch -- a cudaFuncSetAttribute call inside a timed loop would show up
   // as kernel time that is not kernel time.
+  // (Single-device assumption: the attribute is per-device, and this project
+  // benchmarks one GPU. A multi-GPU user would need to key this by device.)
   static const size_t kDefaultCap = 48u * 1024u;
   static int s_configured = 0;
   if (smem > kDefaultCap && (int)smem > s_configured) {

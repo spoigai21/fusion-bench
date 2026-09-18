@@ -52,7 +52,7 @@ torch::Tensor run_softmax(const torch::Tensor& x, Launcher launcher, const char*
 }  // namespace
 
 // Phase 1: the plumbing check. y = x.
-torch::Tensor copy(const torch::Tensor& x) {
+torch::Tensor copy_tensor(const torch::Tensor& x) {
   check_input(x, "copy");
   const at::cuda::CUDAGuard guard(x.device());
   auto y = torch::empty_like(x);
@@ -95,7 +95,7 @@ int64_t v1_smem_bytes(int64_t D) {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.doc() = "fusion-bench softmax ladder: v0 naive, v1 shared-memory fused, v2 online";
-  m.def("copy", &copy, "identity copy kernel (phase 1 plumbing check)");
+  m.def("copy", &copy_tensor, "identity copy kernel (phase 1 plumbing check)");
   m.def("softmax_v0", &softmax_v0, "v0: naive, three global-memory passes");
   m.def("softmax_v1", &softmax_v1, "v1: fused via shared memory, one global read");
   m.def("softmax_v2", &softmax_v2, "v2: online softmax, warp shuffles, float4");
