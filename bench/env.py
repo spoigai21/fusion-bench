@@ -147,6 +147,27 @@ def header_lines(info: dict) -> list[str]:
     return [f"# {k}={v}" for k, v in info.items()]
 
 
+def merge_saved(info: dict, path: Path | None = None) -> dict:
+    """Fill gaps in a live capture from a previously saved env.json.
+
+    The case this serves: the numbers were produced on a rented GPU, results/ was copied
+    back to a laptop with no CUDA, and the tables are being regenerated there. Without
+    this, every "% of peak" column comes out blank because nothing local can name the
+    card. Live values always win; only missing keys are filled, and the fact that the
+    environment came from a saved file is recorded in the row.
+    """
+    path = path or (ROOT / "results" / "env.json")
+    if info.get("peak_bw_gbs") or not path.exists():
+        return info
+    try:
+        saved = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return info
+    merged = {**saved, **{k: v for k, v in info.items() if v not in (None, "")}}
+    merged["env_source"] = f"live capture + saved {path.name} (no local GPU)"
+    return merged
+
+
 def write_env_json(path: Path | None = None) -> Path:
     info = collect()
     path = path or (ROOT / "results" / "env.json")

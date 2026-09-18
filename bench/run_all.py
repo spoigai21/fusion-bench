@@ -62,7 +62,10 @@ def main() -> int:
     ap.add_argument("--iters", type=int, default=ITERS)
     ap.add_argument("--tol", type=float, default=TOLERANCE)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default=str(RESULTS / "summary.csv"))
+    ap.add_argument("--results-dir", default=str(RESULTS),
+                    help="where summary.csv, env.json and raw/ are written")
+    ap.add_argument("--out", default=None,
+                    help="override the summary.csv path (default: <results-dir>/summary.csv)")
     ap.add_argument("--skip-compile", action="store_true",
                     help="skip the torch.compile baseline (inductor can be slow to build)")
     args = ap.parse_args()
@@ -71,16 +74,23 @@ def main() -> int:
         print("CUDA not available", file=sys.stderr)
         return 2
 
+    # Everything this run produces goes under one directory, so a run pointed somewhere
+    # else cannot leave files scattered in the repo's results/.
+    results_dir = Path(args.results_dir)
+    out = Path(args.out) if args.out else results_dir / "summary.csv"
+
     info = env.collect()
-    env.write_env_json()
+    env.write_env_json(results_dir / "env.json")
     peak = info.get("peak_bw_gbs")
 
     print(f"GPU        : {info.get('gpu')}  ({info.get('sm_count')} SMs)")
     print(f"peak BW    : {peak} GB/s  [{info.get('peak_bw_source')}]")
     print(f"torch/cuda : {info.get('torch')} / {info.get('cuda_runtime')}")
-    print(f"clocks     : sm {info.get('clocks_sm_clock')} (max {info.get('clocks_sm_clock_max')}), "
-          f"mem {info.get('clocks_mem_clock')} (max {info.get('clocks_mem_clock_max')})")
-    print(f"throttle   : {info.get('clocks_throttle_reasons')}")
+    print(f"clocks     : sm {info.get('clocks_sm_clock', 'n/a')} "
+          f"(max {info.get('clocks_sm_clock_max', 'n/a')}), "
+          f"mem {info.get('clocks_mem_clock', 'n/a')} "
+          f"(max {info.get('clocks_mem_clock_max', 'n/a')})")
+    print(f"throttle   : {info.get('clocks_throttle_reasons', 'n/a')}")
     print(f"protocol   : {args.warmup} warmup + {args.iters} timed, CUDA events, median\n")
 
     fns = dict(KERNELS)
@@ -97,7 +107,7 @@ def main() -> int:
         path = v2_path(x)
         smem = v1_smem_bytes(d)
         working_mb = n * d * 4 / 1e6
-        print(f"== {n}x{d}  ({working_mb:.0f} MB input, v2 path {path}, "
+        print(f"== {n}x{d}  ({working_mb:.1f} MB input, v2 path {path}, "
               f"v1 shared mem {smem / 1024:.1f} KB/block)")
 
         reset_compile_cache()  # inductor specializes per shape; never recompile while timing
@@ -162,7 +172,7 @@ def main() -> int:
                   f"{ideal_g:7.0f} GB/s effective"
                   + (f" ({100 * ideal_g / peak:.0f}% of peak)" if peak else ""))
 
-            write_raw(RESULTS / "raw" / f"{name}_{n}x{d}.csv", t, header)
+            write_raw(results_dir / "raw" / f"{name}_{n}x{d}.csv", t, header)
             shape_rows[name] = row
             rows.append(row)
 
@@ -178,7 +188,6 @@ def main() -> int:
                 row["speedup_vs_torch"] = f"{float(tsm) / me:.3f}"
         print()
 
-    out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="") as f:
         for line in header:
@@ -188,9 +197,9 @@ def main() -> int:
         w.writerows(rows)
 
     print(f"wrote {out}")
-    print(f"      {RESULTS / 'raw'}/  ({len([r for r in rows if r['status'] == 'pass'])} "
+    print(f"      {results_dir / 'raw'}/  ({len([r for r in rows if r['status'] == 'pass'])} "
           f"timing files, {args.iters} samples each)")
-    print(f"      {RESULTS / 'env.json'}")
+    print(f"      {results_dir / 'env.json'}")
 
     failed = [r for r in rows if r["status"] in ("FAIL", "error")]
     if failed:

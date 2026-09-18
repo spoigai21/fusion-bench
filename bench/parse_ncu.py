@@ -113,9 +113,9 @@ def aggregate(rows: list[dict]) -> dict[str, dict[str, float]]:
     return out
 
 
-def load_timings() -> dict[tuple[int, int, str], float]:
+def load_timings(path: Path | None = None) -> dict[tuple[int, int, str], float]:
     """median_us keyed by (n, d, kernel), from results/summary.csv."""
-    path = RESULTS / "summary.csv"
+    path = path or (RESULTS / "summary.csv")
     if not path.exists():
         return {}
     lines = [ln for ln in path.read_text().splitlines() if not ln.startswith("#")]
@@ -142,12 +142,16 @@ def main() -> int:
                     help="Plan B: derive bytes from the model instead of counters")
     ap.add_argument("--shapes", default="4096x1024,4096x8192",
                     help="shapes to emit in --analytic mode")
+    ap.add_argument("--summary", default=str(RESULTS / "summary.csv"),
+                    help="timings to join against, for GB/s and % of peak")
     ap.add_argument("--out", default=str(RESULTS / "bytes.csv"))
     args = ap.parse_args()
 
-    info = env.collect()
+    # Post-processing often happens off the GPU box; fall back to the env.json written
+    # beside the timings so the % of peak column is not silently blank.
+    info = env.merge_saved(env.collect(), Path(args.summary).parent / "env.json")
     peak = info.get("peak_bw_gbs")
-    timings = load_timings()
+    timings = load_timings(Path(args.summary))
     rows: list[dict] = []
 
     def emit(n: int, d: int, kernel: str, read: float, write: float, l2: float,
@@ -220,13 +224,14 @@ def main() -> int:
         w.writerows(rows)
 
     # Human-readable echo of the table that goes in the README.
-    print(f"\n{'shape':>12} {'kernel':<14}{'DRAM MB':>10}{'L2 MB':>10}{'x ideal':>9}"
-          f"{'us':>9}{'GB/s':>9}{'% peak':>8}  source")
+    print(f"\n{'shape':<13}{'kernel':<15}{'DRAM MB':>10}{'L2 MB':>10}{'x ideal':>9}"
+          f"{'us':>11}{'GB/s':>9}{'% peak':>8}   source")
     for r in rows:
-        print(f"{r['n']}x{r['d']:<7} {r['kernel']:<14}"
+        us = f"{float(r['median_us']):.1f}" if r["median_us"] else "-"
+        print(f"{str(r['n']) + 'x' + str(r['d']):<13}{r['kernel']:<15}"
               f"{r['dram_total_bytes'] / 1e6:>10.1f}{r['l2_total_bytes'] / 1e6:>10.1f}"
-              f"{r['dram_vs_ideal']:>9}{r['median_us']:>9}{r['dram_gbps']:>9}"
-              f"{r['pct_peak']:>8}  {r['source']}")
+              f"{r['dram_vs_ideal'] or '-':>9}{us:>11}{r['dram_gbps'] or '-':>9}"
+              f"{r['pct_peak'] or '-':>8}   {r['source']}")
     print(f"\nwrote {out}")
     return 0
 
