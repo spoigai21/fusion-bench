@@ -206,8 +206,11 @@ __global__ void softmax_v0_kernel(const float* __restrict__ x, float* __restrict
 // ---------------------------------------------------------------------------------
 //
 // Traffic model: 1 read + 1 write = 8*N*D bytes.
-// Cost: D*4 bytes of shared memory per block. At D = 8192 that is 32 KB, so only one
-// block co-resides per SM on a 48 KB carve-out -- which is exactly what v2 fixes.
+// Cost: D*4 bytes of shared memory per block. At D = 8192 that is 33 KB, which caps
+// co-residency at 4 blocks/SM against the A100's 164 KB -- 50% occupancy. Measured from
+// ptxas, not assumed: see scripts/nvcc_check.sh and docs/notes.md. Notably v2c lands at
+// the same 50% there, register-limited, so shared memory is a real cost but not the
+// thing that separates the two.
 
 __global__ void softmax_v1_kernel(const float* __restrict__ x, float* __restrict__ y, int D) {
   extern __shared__ float s_dyn[];
@@ -283,9 +286,11 @@ __global__ void softmax_v2a_kernel(const float* __restrict__ x, float* __restric
 // v2c — online + warp shuffles + float4 + registers (attribution rung 3 of 3)
 // ---------------------------------------------------------------------------------
 //
-// Traffic model: 1 read + 1 write = 8*N*D bytes, same as v1, but with no shared memory
-// holding the row, so many blocks co-reside per SM at large D. This is also the kernel
-// `softmax_v2` dispatches to whenever the shape allows it.
+// Traffic model: 1 read + 1 write = 8*N*D bytes, same as v1. The row lives in registers
+// rather than shared memory, which costs registers instead: 54 of them at VPT=8, so
+// 4 blocks/SM at D = 8192 -- the same occupancy v1 gets there. What is left to win with
+// is the 128-bit loads and not making the shared-memory round trip. This is also the
+// kernel `softmax_v2` dispatches to whenever the shape allows it.
 //
 // VPT = float4s per thread. The row lives in `reg`, so the normalize pass needs neither
 // a global re-read (which the generic fallback below pays for) nor shared memory.

@@ -25,11 +25,15 @@ what makes that visible. So:
 
 - **v0 → v1 is a traffic win.** Predicted 2.0× less total traffic (3 reads become 1).
   This is the rung the project's claim rests on.
-- **v1 → v2 is an occupancy win, not a traffic win.** v1 needs `D·4` bytes of shared
-  memory per block — 32 KB at `D = 8192`, so roughly one block per SM on a 48 KB
-  carve-out. v2 holds the row in registers instead, so many blocks co-reside. If v2 beats
-  v1 at `D = 8192` while moving the same bytes, that is the evidence, and the DRAM
-  counters should show it: equal bytes, less time, higher achieved bandwidth.
+- **v1 → v2 is not a traffic win, and — per the compiler — not an occupancy win either.**
+  This is a correction to an earlier version of this file, made after reading real
+  `ptxas` output rather than reasoning from the algorithm; see *Compile-time resources*
+  below. v1 and v2c both reach 50% occupancy at `D = 8192`: v1 capped by shared memory,
+  v2c capped by registers. Same bytes, same occupancy. So if v2c wins there, the cause
+  has to be something else — 128-bit `float4` loads, and the absence of v1's
+  shared-memory round trip (v1 writes the row to shared memory and then reads it twice
+  more, behind several `__syncthreads()`; v2c uses one barrier and keeps the row in
+  registers throughout).
 
 A prediction that separates the two is more useful than one that claims both rungs are
 the same kind of win.
@@ -60,7 +64,7 @@ table measures total traffic, so 2× is the number to compare the speedup agains
 | | |
 |---|---|
 | Predicted traffic ratio | 1.00× — same bytes |
-| Predicted speedup at 4096×8192 | 1.3–1.8×, entirely from occupancy: no shared-memory ceiling, warp-shuffle reductions instead of `__syncthreads()` trees, 128-bit loads |
+| Predicted speedup at 4096×8192 | 1.1–1.4×. Revised down after the `ptxas` numbers: occupancy is equal (50% both ways), so the only levers left are the `float4` loads and skipping v1's shared-memory round trip |
 | Predicted speedup at 4096×1024 | small, maybe none. At `D = 1024` v1 needs only 4 KB/block, so the occupancy argument barely applies |
 | Measured traffic ratio | |
 | Measured speedup | |
@@ -115,6 +119,43 @@ outcome is genuinely open. If ATen stays ahead, the interesting output of this p
 the explanation from the counters, not a speedup number.
 
 ---
+
+## Compile-time resources — measured, without a GPU
+
+`bash scripts/nvcc_check.sh` compiles `kernels.cu` with the real `nvcc` for `sm_80` and
+reports per-kernel resources. This needs no GPU: `nvcc` needs a device to *run* a kernel,
+not to compile one. Figures below are from CUDA 12.6.2, `-O3 --use_fast_math -lineinfo`,
+256-thread blocks.
+
+| kernel | registers | static smem | dynamic smem at D=8192 | blocks/SM at D=8192 | occupancy |
+|---|---|---|---|---|---|
+| v0 | 26 | — | 1 KB | 8 | 100% |
+| v1 | 28 | — | 33 KB | 4 | **50%** |
+| v2a | 24 | — | 2 KB | 8 | 100% |
+| v2b | 24 | 64 B | — | 8 | 100% |
+| v2c (VPT=8) | 54 | 64 B | — | 4 | **50%** |
+| v2c (VPT=16) | 82 | 64 B | — | 2 | 25% |
+
+Two things worth having before renting anything:
+
+**Zero spills, in every kernel.** `0 bytes stack frame, 0 bytes spill stores, 0 bytes
+spill loads` throughout, including `VPT=16` at 82 registers. This was a genuine risk: if
+the row had spilled, v2c's "register-resident" row would have been living in local
+memory, which is global memory, and the 1-read traffic claim would have been quietly
+false while still looking fine in the timings. It holds.
+
+**The occupancy argument for v2 over v1 does not survive.** Both land at 50% at
+`D = 8192` — v1 because 33 KB of shared memory per block caps it at 4 blocks on the
+A100's 164 KB, v2c because 54 registers × 256 threads caps it at 4 blocks on 65536
+registers. Equal occupancy, equal traffic. That makes rung 2 a much more interesting
+measurement than it was when this file claimed occupancy would explain it: if v2c wins,
+the explanation has to come from the counters and the instruction mix, not from a
+resource table.
+
+Note also that v2a and v2b have the *best* occupancy of the set (100%) and the *worst*
+traffic (1.5× ideal). If DRAM bandwidth is the binding constraint at 4096×8192, they
+should still lose — which is the cleanest test in the project of whether the whole
+premise holds.
 
 ## The L2 caveat — why the small shape is expected to break the model
 
