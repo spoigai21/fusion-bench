@@ -123,6 +123,30 @@ def v2_vec_row(row):
     return np.array([f32(exp_shift(v, m) * inv) for v in row], dtype=f32)
 
 
+def block_reduce_online_tree(ms, ds):
+    """Shared-memory tree over BLOCK online pairs -- v2a's reduction."""
+    ms, ds = list(ms), list(ds)
+    s = BLOCK // 2
+    while s > 0:
+        for t in range(s):
+            ms[t], ds[t] = online_combine(ms[t], ds[t], ms[t + s], ds[t + s])
+        s >>= 1
+    return ms[0], ds[0]
+
+
+def v2a_row(row):
+    """Online pass, shared-memory tree reduction, re-read to normalize."""
+    D = len(row)
+    ms = [NEG_INF] * BLOCK
+    ds = [f32(0.0)] * BLOCK
+    for t in range(BLOCK):
+        for i in range(t, D, BLOCK):
+            ms[t], ds[t] = online_update(ms[t], ds[t], row[i])
+    m, d = block_reduce_online_tree(ms, ds)
+    inv = f32(f32(1.0) / d)
+    return np.array([f32(exp_shift(v, m) * inv) for v in row], dtype=f32)
+
+
 def v2_gen_row(row):
     D = len(row)
     ms = [NEG_INF] * BLOCK
@@ -191,7 +215,11 @@ for n, r in cases.items():
     if len(r) % 4 == 0:
         report(check(n, r, v2_vec_row))
 
-print("\n=== v2 generic (scalar fallback) ===")
+print("\n=== v2a (online + shared-memory tree reduction) ===")
+for n, r in cases.items():
+    report(check(n, r, v2a_row))
+
+print("\n=== v2b / v2 generic (online + warp shuffle, scalar) ===")
 for n, r in cases.items():
     report(check(n, r, v2_gen_row))
 

@@ -28,6 +28,13 @@ v0 is deliberately bad but not *stupidly* bad: threads within a block read conse
 addresses, so its loads are already coalesced. That matters — it makes the v0 → v1 delta
 a measurement of fusion alone, not fusion confounded with access pattern.
 
+Phase 5's three changes are also kept as separate kernels — `v2a` (online pass only),
+`v2b` (`+` warp shuffles), `v2c` (`+` `float4` and register residency) — so the rung-2
+win can be attributed to the change that produced it rather than to all three at once.
+`make bench-variants` times them and draws a second chart. The prediction, recorded
+before measuring, is that **v2a loses to v1** and almost all of v2's win is v2c's
+register residency; see [`docs/notes.md`](docs/notes.md).
+
 v2's online update is Milakov & Gimelshein ([arXiv:1805.02867](https://arxiv.org/abs/1805.02867)):
 
 ```
@@ -174,7 +181,7 @@ number without its environment is not reproducible.
 
 ```
 src/
-  kernels.cu         v0, v1, v2 — all three kept in the tree
+  kernels.cu         v0, v1, v2 + the v2a/v2b/v2c attribution variants
   bindings.cpp       torch extension entry points, all validation
   softmax.h          launcher declarations (kernels.cu stays torch-free)
 bench/

@@ -90,6 +90,30 @@ __device__ __forceinline__ float block_reduce_sum(float v, float* red) {
   return r;
 }
 
+// Shared-memory tree reduction over online (max, sum) pairs. This is what v2a uses:
+// the online formulation, but reduced the same way v1 reduces, so that isolating the
+// warp-shuffle change in v2b measures the reduction mechanism and nothing else.
+// `sm`/`sd` are blockDim floats each.
+__device__ __forceinline__ void block_reduce_online_tree(float& m, float& d, float* sm,
+                                                         float* sd) {
+  const int tid = threadIdx.x;
+  sm[tid] = m;
+  sd[tid] = d;
+  __syncthreads();
+  for (int s = blockDim.x >> 1; s > 0; s >>= 1) {
+    if (tid < s) {
+      float mm = sm[tid], dd = sd[tid];
+      online_combine(mm, dd, sm[tid + s], sd[tid + s]);
+      sm[tid] = mm;
+      sd[tid] = dd;
+    }
+    __syncthreads();
+  }
+  m = sm[0];
+  d = sd[0];
+  __syncthreads();
+}
+
 // Warp-shuffle reduction of an online (max, sum) pair: values move through registers,
 // so there is no shared memory and no __syncthreads() inside the warp.
 __device__ __forceinline__ void warp_reduce_online(float& m, float& d, int width) {
@@ -220,11 +244,48 @@ __global__ void softmax_v1_kernel(const float* __restrict__ x, float* __restrict
 }
 
 // ---------------------------------------------------------------------------------
-// v2 — online softmax, warp shuffles, float4, row resident in registers
+// v2a — online softmax ONLY (attribution rung 1 of 3)
+// ---------------------------------------------------------------------------------
+//
+// One pass to compute the running max and running sum together, where v1 needed two
+// passes over shared memory. Everything else is deliberately held at v1's technology:
+// scalar loads, shared-memory tree reduction.
+//
+// Traffic model: 2 reads + 1 write = 12*N*D bytes. Note this is MORE than v1, not less:
+// v1 read the row once into shared memory and normalized from there, while v2a holds no
+// row at all and must re-read it. The online formulation removes a pass over *shared*
+// memory, not over DRAM. If v2a loses to v1, that is the reason, and it is the whole
+// point of measuring the rungs separately.
+
+__global__ void softmax_v2a_kernel(const float* __restrict__ x, float* __restrict__ y, int D) {
+  extern __shared__ float s_dyn[];  // 2 * kBlock floats
+  float* sm = s_dyn;
+  float* sd = s_dyn + blockDim.x;
+
+  const long long row = blockIdx.x;
+  const float* __restrict__ xr = x + row * (long long)D;
+  float* __restrict__ yr = y + row * (long long)D;
+
+  const int tid = threadIdx.x;
+  const int stride = blockDim.x;
+
+  float m = kNegInf;
+  float d = 0.0f;
+  for (int i = tid; i < D; i += stride) online_update(m, d, xr[i]);
+
+  block_reduce_online_tree(m, d, sm, sd);
+  const float inv = 1.0f / d;
+
+  for (int i = tid; i < D; i += stride) yr[i] = exp_shift(xr[i], m) * inv;
+}
+
+// ---------------------------------------------------------------------------------
+// v2c — online + warp shuffles + float4 + registers (attribution rung 3 of 3)
 // ---------------------------------------------------------------------------------
 //
 // Traffic model: 1 read + 1 write = 8*N*D bytes, same as v1, but with no shared memory
-// holding the row, so many blocks co-reside per SM at large D.
+// holding the row, so many blocks co-reside per SM at large D. This is also the kernel
+// `softmax_v2` dispatches to whenever the shape allows it.
 //
 // VPT = float4s per thread. The row lives in `reg`, so the normalize pass needs neither
 // a global re-read (which the generic fallback below pays for) nor shared memory.
@@ -278,8 +339,10 @@ __global__ void softmax_v2_vec_kernel(const float4* __restrict__ x, float4* __re
   }
 }
 
-// Generic fallback: any D, any alignment. Still single-pass online for the statistics,
-// but the row does not fit in registers so the normalize pass re-reads it.
+// v2b — online + warp shuffles (attribution rung 2 of 3), and v2's generic fallback for
+// any D or alignment. Identical to v2a except that the block reduction runs through
+// registers via __shfl_down_sync instead of a shared-memory tree, so the v2a -> v2b
+// delta isolates the reduction mechanism.
 // Traffic model: 2 reads + 1 write = 12*N*D bytes. The harness records which path ran.
 __global__ void softmax_v2_gen_kernel(const float* __restrict__ x, float* __restrict__ y, int D) {
   __shared__ float sm[kWarpsPerBlock];
@@ -392,6 +455,49 @@ cudaError_t launch_softmax_v2(const float* x, float* y, int N, int D, cudaStream
 
   softmax_v2_gen_kernel<<<N, kBlock, 0, stream>>>(x, y, D);
   return cudaGetLastError();
+}
+
+// --- attribution variants -------------------------------------------------------
+// v2 above is the rung that goes in the write-up; these three exist so the win can be
+// split across the changes that produced it. v2c is what v2 dispatches to when the
+// shape allows, and v2b is its generic fallback, so measuring all three costs nothing
+// in extra kernel code -- only v2a is unique to this breakdown.
+
+cudaError_t launch_softmax_v2a(const float* x, float* y, int N, int D, cudaStream_t stream) {
+  if (N == 0 || D == 0) return cudaSuccess;
+  const size_t smem = 2u * (size_t)kBlock * sizeof(float);
+  softmax_v2a_kernel<<<N, kBlock, smem, stream>>>(x, y, D);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_softmax_v2b(const float* x, float* y, int N, int D, cudaStream_t stream) {
+  if (N == 0 || D == 0) return cudaSuccess;
+  softmax_v2_gen_kernel<<<N, kBlock, 0, stream>>>(x, y, D);
+  return cudaGetLastError();
+}
+
+cudaError_t launch_softmax_v2c(const float* x, float* y, int N, int D, cudaStream_t stream) {
+  if (N == 0 || D == 0) return cudaSuccess;
+  // No silent fallback here. If v2c cannot run this shape the caller must be told,
+  // because a v2c row that quietly measured v2b would corrupt the attribution.
+  if (!softmax_v2c_eligible(x, D) || !softmax_v2c_eligible(y, D)) return cudaErrorInvalidValue;
+
+  const int Dv = D / 4;
+  const auto* xv = reinterpret_cast<const float4*>(x);
+  auto* yv = reinterpret_cast<float4*>(y);
+  switch (v2_vpt_for(D)) {
+    case 1: softmax_v2_vec_kernel<1><<<N, kBlock, 0, stream>>>(xv, yv, Dv); break;
+    case 2: softmax_v2_vec_kernel<2><<<N, kBlock, 0, stream>>>(xv, yv, Dv); break;
+    case 4: softmax_v2_vec_kernel<4><<<N, kBlock, 0, stream>>>(xv, yv, Dv); break;
+    case 8: softmax_v2_vec_kernel<8><<<N, kBlock, 0, stream>>>(xv, yv, Dv); break;
+    case 16: softmax_v2_vec_kernel<16><<<N, kBlock, 0, stream>>>(xv, yv, Dv); break;
+    default: return cudaErrorInvalidValue;
+  }
+  return cudaGetLastError();
+}
+
+bool softmax_v2c_eligible(const float* x, int D) {
+  return v2_vec_eligible(x, D) && v2_vpt_for(D) != 0;
 }
 
 const char* softmax_v2_path(const float* x, int D) {

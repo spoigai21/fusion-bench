@@ -31,7 +31,14 @@ LADDER_LABELS = {
     "v0": "v0  naive\n3 global passes",
     "v1": "v1  fused\nshared memory",
     "v2": "v2  online\nwarp shuffle + float4",
+    # the attribution ladder inside v2, drawn as a second chart when those rows exist
+    "v2a": "v2a  online only\ntree reduction",
+    "v2b": "v2b  + warp\nshuffle",
+    "v2c": "v2c  + float4\n+ registers",
 }
+# v1 is the starting point of the breakdown: the question it answers is what each of
+# v2's three changes bought over the rung below it.
+ATTRIBUTION = ["v1", "v2a", "v2b", "v2c"]
 # Drawn as reference lines rather than bars: they are the bar to clear, not rungs.
 # Distinct dash patterns as well as distinct hues, so identity never rests on color.
 REFS = [
@@ -61,8 +68,10 @@ def load_summary(path: Path) -> dict[tuple[int, int], dict[str, float]]:
     return data
 
 
-def draw(data, mode: str, out: Path) -> Path:
+def draw(data, mode: str, out: Path, bars: list[str] | None = None,
+         title: str = "Softmax kernel ladder — median time per version") -> Path:
     c = THEME[mode]
+    bars = bars or LADDER
     shapes = sorted(data.keys())
     fig, axes = plt.subplots(
         1, len(shapes), figsize=(5.6 * len(shapes), 4.0), facecolor=c["surface"]
@@ -73,8 +82,8 @@ def draw(data, mode: str, out: Path) -> Path:
     for ax, shape in zip(axes, shapes):
         n, d = shape
         times = data[shape]
-        vals = [times.get(k, 0.0) for k in LADDER]
-        ypos = list(range(len(LADDER)))[::-1]  # v0 at the top, the ladder reads downward
+        vals = [times.get(k, 0.0) for k in bars]
+        ypos = list(range(len(bars)))[::-1]  # first rung at the top, reads downward
 
         ax.set_facecolor(c["surface"])
         ax.barh(ypos, vals, height=0.42, color=c["series"][0], zorder=3)
@@ -82,10 +91,13 @@ def draw(data, mode: str, out: Path) -> Path:
         # Direct labels: 3 marks, so every bar gets its value. Text wears ink tokens,
         # never the series color.
         span = max(vals + [t for k, _, _ in REFS if (t := times.get(k))]) or 1.0
-        for y, k, v in zip(ypos, LADDER, vals):
+        base_key = bars[0]
+        for y, k, v in zip(ypos, bars, vals):
+            if not v:
+                continue
             label = f"{v:,.0f} µs"
-            if times.get("v0") and k != "v0":
-                label += f"   {times['v0'] / v:.2f}× v0"
+            if times.get(base_key) and k != base_key:
+                label += f"   {times[base_key] / v:.2f}× {base_key}"
             # A halo in the surface colour keeps the label legible where it crosses
             # a reference line.
             ax.text(v + span * 0.02, y, label, va="center", ha="left",
@@ -100,7 +112,7 @@ def draw(data, mode: str, out: Path) -> Path:
                        zorder=2, label=label)
 
         ax.set_yticks(ypos)
-        ax.set_yticklabels([LADDER_LABELS[k] for k in LADDER], fontsize=9, color=c["ink2"])
+        ax.set_yticklabels([LADDER_LABELS[k] for k in bars], fontsize=9, color=c["ink2"])
         ax.tick_params(axis="x", colors=c["muted"], labelsize=9)
         ax.tick_params(axis="y", length=0)
         ax.set_xlim(0, span * 1.32)
@@ -123,8 +135,7 @@ def draw(data, mode: str, out: Path) -> Path:
         for text in leg.get_texts():
             text.set_color(c["ink2"])
 
-    fig.suptitle("Softmax kernel ladder — median time per version",
-                 color=c["ink"], fontsize=13, x=0.012, ha="left", y=0.99)
+    fig.suptitle(title, color=c["ink"], fontsize=13, x=0.012, ha="left", y=0.99)
     fig.tight_layout(rect=(0, 0.06, 1, 0.94))
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=200, facecolor=c["surface"], bbox_inches="tight")
@@ -149,8 +160,18 @@ def main() -> int:
     outdir = Path(args.outdir)
     for mode in ("light", "dark"):
         suffix = "" if mode == "light" else "_dark"
-        out = draw(data, mode, outdir / f"time{suffix}.png")
-        print(f"wrote {out}")
+        print(f"wrote {draw(data, mode, outdir / f'time{suffix}.png')}")
+
+    # The breakdown chart is drawn only when the variant rows are actually present,
+    # i.e. after a --variants run. It answers a different question from the headline
+    # chart, so it gets its own figure rather than three more bars on that one.
+    if any(k in t for t in data.values() for k in ("v2a", "v2b", "v2c")):
+        for mode in ("light", "dark"):
+            suffix = "" if mode == "light" else "_dark"
+            out = draw(data, mode, outdir / f"v2_attribution{suffix}.png",
+                       bars=ATTRIBUTION,
+                       title="Where v2's win comes from — one change per rung")
+            print(f"wrote {out}")
     return 0
 
 

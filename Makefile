@@ -5,6 +5,7 @@
 #   make build      compile the extension              (phase 1 checkpoint)
 #   make verify     FP64 cross-check, all edge cases   (phase 2)
 #   make bench      timings   -> results/summary.csv   (phase 6)
+#   make bench-variants  also time v2a/v2b/v2c (phase 5 attribution)
 #   make profile    counters  -> results/raw/ncu_*.csv (phase 6)
 #   make bytes      byte table -> results/bytes.csv
 #   make plot       chart     -> results/plots/
@@ -15,7 +16,7 @@ PYTHON ?= python
 comma := ,
 SHAPES ?= 4096x1024,4096x8192
 
-.PHONY: sim phase0 build verify bench profile bytes analytic plot all quick clean distclean
+.PHONY: sim phase0 build verify bench bench-variants profile bytes analytic plot all quick clean distclean
 
 sim:
 	$(PYTHON) tests/sim_logic.py
@@ -31,6 +32,9 @@ verify:
 
 bench:
 	$(PYTHON) bench/run_all.py --shapes $(SHAPES)
+
+bench-variants:
+	$(PYTHON) bench/run_all.py --shapes $(SHAPES) --variants
 
 quick:
 	$(PYTHON) bench/run_all.py --shapes $(SHAPES) --warmup 5 --iters 20 --skip-compile

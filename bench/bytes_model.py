@@ -37,6 +37,12 @@ MODEL: dict[str, Traffic] = {
     "v1": Traffic(1.0, 1.0, "row staged in shared memory once; both reductions local"),
     "v2": Traffic(1.0, 1.0, "single online pass; row held in registers for normalize"),
     "v2_generic": Traffic(2.0, 1.0, "fallback path: no register residency, re-reads row"),
+    # The attribution ladder inside v2. Note v2a and v2b move MORE than v1, not less:
+    # the online formulation removes a pass over shared memory, not over DRAM. Only v2c
+    # gets back to the floor, by holding the row in registers instead of re-reading it.
+    "v2a": Traffic(2.0, 1.0, "online pass, tree reduction; re-reads the row to normalize"),
+    "v2b": Traffic(2.0, 1.0, "+ warp shuffles; same traffic as v2a, different reduction"),
+    "v2c": Traffic(1.0, 1.0, "+ float4 and register residency; no re-read"),
     # Baselines, for context in the same units.
     "torch_softmax": Traffic(1.0, 1.0, "ATen persistent kernel: ideal traffic"),
     "torch_compile": Traffic(1.0, 1.0, "inductor fuses the composition; ideal if it works"),
@@ -90,3 +96,11 @@ if __name__ == "__main__":
     print(f"predicted v0/v2 traffic ratio: {predicted_ratio('v0', 'v2'):.2f}x")
     print(f"predicted v1/v2 traffic ratio: {predicted_ratio('v1', 'v2'):.2f}x  (no traffic win;")
     print("    v2's win at large D is occupancy, not bytes -- see docs/notes.md)")
+    print()
+    print("attribution ladder inside v2:")
+    print(f"  v1  -> v2a traffic ratio: {predicted_ratio('v2a', 'v1'):.2f}x  "
+          "(v2a moves MORE: it re-reads the row)")
+    print(f"  v2a -> v2b traffic ratio: {predicted_ratio('v2b', 'v2a'):.2f}x  "
+          "(identical bytes; only the reduction changes)")
+    print(f"  v2b -> v2c traffic ratio: {predicted_ratio('v2c', 'v2b'):.2f}x  "
+          "(the re-read disappears into registers)")

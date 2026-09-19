@@ -29,7 +29,7 @@ import torch  # noqa: E402
 
 from bench.baselines import BASELINES, naive_composition  # noqa: E402
 from bench.harness import TOLERANCE, validate  # noqa: E402
-from bench.kernels import KERNELS, v1_smem_bytes, v2_path  # noqa: E402
+from bench.kernels import KERNELS, VARIANTS, v1_smem_bytes, v2_path  # noqa: E402
 
 
 def cases(seed: int = 0) -> list[tuple[str, torch.Tensor, str]]:
@@ -89,6 +89,9 @@ def main() -> int:
     ap.add_argument("--tol", type=float, default=TOLERANCE)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--variants", action="store_true",
+                    help="check v2a/v2b/v2c instead of the baselines (keeps the table "
+                         "narrow enough to read)")
     args = ap.parse_args()
 
     if not torch.cuda.is_available():
@@ -99,8 +102,11 @@ def main() -> int:
     if not args.quiet:
         show_overflow_demo()
 
-    fns = {**KERNELS, "naive_composition": naive_composition,
-           "torch_softmax": BASELINES["torch_softmax"]}
+    if args.variants:
+        fns = {**KERNELS, **VARIANTS}
+    else:
+        fns = {**KERNELS, "naive_composition": naive_composition,
+               "torch_softmax": BASELINES["torch_softmax"]}
 
     print(f"{'case':<16}{'D':>7}  {'v2 path':<9}" + "".join(f"{k:>20}" for k in fns))
     print("-" * (16 + 7 + 2 + 9 + 20 * len(fns)))
@@ -116,9 +122,11 @@ def main() -> int:
                 if not ok:
                     failures.append(f"{fn_name} on {case_name} (err {err:.3e})")
             except RuntimeError as exc:
-                # v1's shared-memory ceiling is a documented limit, not a wrong answer.
-                if "shared memory" in str(exc):
-                    cell = f"SKIP {v1_smem_bytes(d) // 1024}KB"
+                # A limit the kernel states up front is not a wrong answer: v1 has a
+                # shared-memory ceiling and v2c refuses shapes it cannot vectorize.
+                if "documented limit" in str(exc):
+                    extra = f" {v1_smem_bytes(d) // 1024}KB" if fn_name == "v1" else ""
+                    cell = "SKIP" + extra
                 else:
                     cell = "ERROR"
                     failures.append(f"{fn_name} on {case_name}: {exc}")

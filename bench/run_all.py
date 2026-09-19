@@ -29,7 +29,9 @@ from bench import env  # noqa: E402
 from bench.baselines import BASELINES, reset_compile_cache  # noqa: E402
 from bench.bytes_model import gbps, ideal_bytes, predicted_bytes  # noqa: E402
 from bench.harness import ITERS, TOLERANCE, WARMUP, make_input, time_fn, validate, write_raw  # noqa: E402
-from bench.kernels import DESCRIPTIONS, KERNELS, v1_smem_bytes, v2_path  # noqa: E402
+from bench.kernels import (  # noqa: E402
+    DESCRIPTIONS, KERNELS, VARIANTS, v1_smem_bytes, v2_path,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "results"
@@ -66,6 +68,8 @@ def main() -> int:
                     help="where summary.csv, env.json and raw/ are written")
     ap.add_argument("--out", default=None,
                     help="override the summary.csv path (default: <results-dir>/summary.csv)")
+    ap.add_argument("--variants", action="store_true",
+                    help="also time v2a/v2b/v2c, the attribution ladder inside v2")
     ap.add_argument("--skip-compile", action="store_true",
                     help="skip the torch.compile baseline (inductor can be slow to build)")
     args = ap.parse_args()
@@ -94,6 +98,8 @@ def main() -> int:
     print(f"protocol   : {args.warmup} warmup + {args.iters} timed, CUDA events, median\n")
 
     fns = dict(KERNELS)
+    if args.variants:
+        fns.update(VARIANTS)
     for name, fn in BASELINES.items():
         if args.skip_compile and name == "torch_compile":
             continue
@@ -114,7 +120,8 @@ def main() -> int:
 
         shape_rows: dict[str, dict] = {}
         for name, fn in fns.items():
-            kind = "kernel" if name in KERNELS else "baseline"
+            kind = "kernel" if name in KERNELS else ("variant" if name in VARIANTS
+                                                     else "baseline")
             row = {f: "" for f in FIELDS}
             row.update({
                 "n": n, "d": d, "kernel": name, "kind": kind,
@@ -126,9 +133,13 @@ def main() -> int:
             try:
                 ok, err = validate(fn, x, args.tol)
             except RuntimeError as exc:
+                # A limit the kernel states up front (v1's shared-memory ceiling, v2c's
+                # vectorization requirement) is a skip, not a failure. The kernels own
+                # those rules; nothing here re-derives them.
                 msg = str(exc).splitlines()[0]
-                row.update({"status": "error", "max_abs_err": ""})
-                print(f"  {name:<20} ERROR   {msg[:80]}")
+                limit = "documented limit" in msg
+                row["status"] = "skip" if limit else "error"
+                print(f"  {name:<20} {'skip ' if limit else 'ERROR'}   {msg[:90]}")
                 rows.append(row)
                 continue
 

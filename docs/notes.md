@@ -66,6 +66,46 @@ table measures total traffic, so 2× is the number to compare the speedup agains
 | Measured speedup | |
 | Verdict | |
 
+### Rung 2, broken down — v2a → v2b → v2c
+
+Phase 5 lands v2's three changes separately so the win is attributable. Each variant
+adds exactly one thing to the one below it:
+
+| | change | traffic vs v1 |
+|---|---|---|
+| v2a | online pass (running max + sum together), scalar loads, shared-memory tree reduction | **1.5× more** (2 reads + 1 write) |
+| v2b | + warp-shuffle reduction instead of the tree | same as v2a |
+| v2c | + `float4` loads and the row held in registers | 1.0× (back to the floor) |
+
+The uncomfortable prediction, stated plainly: **v2a should lose to v1, possibly badly.**
+The online formulation removes a pass over *shared* memory, and v1's two shared-memory
+passes were never the bottleneck. What v2a gives up is v1's staged row, so it has to
+re-read the row from global to normalize — 50% more DRAM traffic than v1 for a saving
+that costs nothing on the machine that matters.
+
+If that is right, then the story of rung 2 is not "online softmax is faster". It is:
+
+- **v2a → v2b: small.** Predicted 1.0–1.15×. Identical bytes; the shuffle removes
+  `__syncthreads()` and 2 KB of shared memory per block, which helps occupancy a little.
+- **v2b → v2c: large.** Predicted 1.5× or better at 4096×8192. This rung removes a whole
+  read of the tensor *and* switches to 128-bit loads, so it is the only one of the three
+  that changes the traffic the counters measure.
+
+Which would make the honest headline **"the win is register residency, not the online
+formulation"** — with the online formulation being what *permits* register residency,
+since you cannot hold the row and also make two passes over it. That is a more
+interesting claim than "v2 is faster than v1", and the three rows are what test it.
+
+| | v2a | v2b | v2c |
+|---|---|---|---|
+| Measured traffic vs v1 | | | |
+| Measured time at 4096×8192 | | | |
+| Verdict | | | |
+
+Run with `python bench/run_all.py --variants`. v2c refuses shapes it cannot vectorize
+rather than falling back to v2b, so a variant row can never silently measure a
+different kernel than the one it names.
+
 ### Against `torch.softmax`
 
 Predicted: **ATen wins or ties at 4096×1024**, where its persistent warp-per-row kernel

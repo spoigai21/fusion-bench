@@ -75,12 +75,37 @@ torch::Tensor softmax_v1(const torch::Tensor& x) {
   C10_CUDA_CHECK(cudaDeviceGetAttribute(&max_smem, cudaDevAttrMaxSharedMemoryPerBlockOptin, dev));
   TORCH_CHECK(softmax_v1_smem_bytes(D) <= max_smem, "softmax_v1: D=", D, " needs ",
               softmax_v1_smem_bytes(D), " B of shared memory, device max is ", max_smem,
-              " B. This is the v1 scaling limit that motivates v2.");
+              " B. documented limit: this is the v1 scaling ceiling that motivates v2.");
   return run_softmax(x, &launch_softmax_v1, "softmax_v1");
 }
 
 torch::Tensor softmax_v2(const torch::Tensor& x) {
   return run_softmax(x, &launch_softmax_v2, "softmax_v2");
+}
+
+// --- attribution variants --------------------------------------------------------
+// These isolate v2's three changes. softmax_v2 stays the rung that goes in the
+// write-up; these exist so the win can be split across what produced it.
+
+torch::Tensor softmax_v2a(const torch::Tensor& x) {
+  return run_softmax(x, &launch_softmax_v2a, "softmax_v2a");
+}
+
+torch::Tensor softmax_v2b(const torch::Tensor& x) {
+  return run_softmax(x, &launch_softmax_v2b, "softmax_v2b");
+}
+
+torch::Tensor softmax_v2c(const torch::Tensor& x) {
+  // Checked here rather than left to the launcher's error code, so the reason reads as
+  // a stated limit instead of "invalid argument". v2c never falls back: an attribution
+  // row that quietly measured v2b would be worse than a missing row.
+  check_2d(x, "softmax_v2c");
+  const int D = static_cast<int>(x.size(1));
+  TORCH_CHECK(softmax_v2c_eligible(x.data_ptr<float>(), D), "softmax_v2c: D=", D,
+              " documented limit: the vectorized path needs D % 4 == 0, a 16B-aligned "
+              "base and D <= 16384 to hold the row in registers. Use softmax_v2, which "
+              "falls back to v2b for such shapes.");
+  return run_softmax(x, &launch_softmax_v2c, "softmax_v2c");
 }
 
 // Introspection used by the harness so the CSV records which path actually ran.
@@ -99,6 +124,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("softmax_v0", &softmax_v0, "v0: naive, three global-memory passes");
   m.def("softmax_v1", &softmax_v1, "v1: fused via shared memory, one global read");
   m.def("softmax_v2", &softmax_v2, "v2: online softmax, warp shuffles, float4");
+  m.def("softmax_v2a", &softmax_v2a, "v2a: online pass only, shared-memory tree reduction");
+  m.def("softmax_v2b", &softmax_v2b, "v2b: v2a + warp-shuffle reduction");
+  m.def("softmax_v2c", &softmax_v2c, "v2c: v2b + float4 loads and register-resident row");
   m.def("v2_path", &v2_path, "which v2 code path a tensor of this shape takes");
   m.def("v1_smem_bytes", &v1_smem_bytes, "shared memory v1 needs for a row of length D");
 }
