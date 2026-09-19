@@ -145,7 +145,8 @@ make build
 make verify
 
 # 3. timings -> results/summary.csv, results/raw/
-make bench
+#    (bench-variants also times v2a/v2b/v2c, which step 4 profiles)
+make bench-variants
 
 # 4. counters -> results/raw/ncu_*.csv -> results/bytes.csv
 make profile && make profile-variants && make bytes
@@ -187,7 +188,9 @@ src/
   softmax.h          launcher declarations (kernels.cu stays torch-free)
 bench/
   ext.py             JIT build via torch.utils.cpp_extension.load
+  kernels.py         the kernel registry — ladder and attribution variants
   harness.py         timing protocol — events, warmup, median, raw logging
+  env.py             environment capture, written into every CSV header
   baselines.py       naive composition, torch.softmax, torch.compile, FP64 reference
   bytes_model.py     the analytic traffic model (prediction, and Plan B)
   run_all.py         validate + time -> results/summary.csv

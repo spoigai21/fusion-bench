@@ -55,7 +55,9 @@ analytic:
 plot:
 	$(PYTHON) bench/plot.py
 
-all: verify bench profile bytes plot
+# The full pipeline times and profiles the attribution variants too, so every
+# counter row in bytes.csv has a timing to join against.
+all: verify bench-variants profile profile-variants bytes plot
 
 clean:
 	rm -rf .build __pycache__ bench/__pycache__ tests/__pycache__
