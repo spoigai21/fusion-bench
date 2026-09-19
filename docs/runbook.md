@@ -10,6 +10,8 @@ Nothing here needs a GPU:
 
 ```bash
 make sim                               # simulate the reduction logic against FP64
+bash scripts/nvcc_check.sh             # compile kernels.cu with real nvcc (needs Docker)
+bash scripts/torch_header_check.sh     # compile bindings.cpp against real libtorch
 python bench/bytes_model.py            # the predictions, printed
 python bench/parse_ncu.py --analytic   # what Plan B's table would look like
 ```
@@ -155,4 +157,5 @@ else is regenerable; those files are the deliverable.
 | `ncu` CSV is unparseable | the profiled script printed to stdout. `profile_one.py` logs to stderr for exactly this reason |
 | one timing sample is 50× the rest | `torch.compile` recompiled inside the timed loop. `run_all.py` resets the compile cache per shape so compilation always lands in warmup |
 | metric not found | Nsight metric names change between versions; check `ncu --query-metrics` rather than a copied command line |
+| `C++20 or later compatible compiler is required` | torch >= 2.6 needs gcc 10+. Every PyTorch CUDA image has it, but a bare CUDA image plus a pip torch may not |
 | v1 errors at large `D` | it needs `D·4` bytes of shared memory per block. That ceiling is the point of v2, and `bindings.cpp` reports it as a limit rather than launching something that cannot fit |
