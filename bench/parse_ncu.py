@@ -34,18 +34,36 @@ from bench.bytes_model import MODEL, gbps, ideal_bytes, predicted_bytes  # noqa:
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "results"
 
-# Substring -> ladder name. ncu demangles kernel names by default.
+# Substring -> reported name. ncu demangles kernel names by default.
+#
+# Two mappings, because v2 shares its CUDA kernels with v2b and v2c: v2 dispatches to
+# the vectorized kernel when it can and the generic one otherwise. A file profiled as
+# the headline ladder reports those as "v2"; a file profiled as the attribution ladder
+# reports them under their own names. The file's name selects the mapping, and
+# profile_one.py refuses to launch both in one run, so a row is never ambiguous.
 KERNEL_MAP = [
     ("softmax_v0_kernel", "v0"),
     ("softmax_v1_kernel", "v1"),
     ("softmax_v2_vec_kernel", "v2"),
     ("softmax_v2_gen_kernel", "v2"),
     # ATen's softmax has had several names across versions; match the common ones.
+    ("softmax_v2a_kernel", "v2a"),
     ("cunn_SoftMaxForward", "torch_softmax"),
     ("softmax_warp_forward", "torch_softmax"),
     ("dispatch_softmax_forward", "torch_softmax"),
     ("SoftMaxForward", "torch_softmax"),
 ]
+
+VARIANT_KERNEL_MAP = [
+    ("softmax_v0_kernel", "v0"),
+    ("softmax_v1_kernel", "v1"),
+    ("softmax_v2a_kernel", "v2a"),
+    ("softmax_v2_gen_kernel", "v2b"),
+    ("softmax_v2_vec_kernel", "v2c"),
+] + [m for m in KERNEL_MAP if m[1] == "torch_softmax"]
+
+LADDER_ORDER = ("v0", "v1", "v2", "torch_softmax")
+VARIANT_ORDER = ("v0", "v1", "v2a", "v2b", "v2c", "torch_softmax")
 
 # ncu reports byte metrics with an auto-scaled unit unless --print-units base is passed.
 # Handle both. Nsight uses SI prefixes for byte counters.
@@ -59,8 +77,8 @@ WRITE_METRICS = ("dram__bytes_write.sum",)
 L2_METRICS = ("lts__t_bytes.sum",)
 
 
-def classify(kernel_name: str) -> str | None:
-    for needle, name in KERNEL_MAP:
+def classify(kernel_name: str, kernel_map=KERNEL_MAP) -> str | None:
+    for needle, name in kernel_map:
         if needle in kernel_name:
             return name
     return None
@@ -92,12 +110,12 @@ def to_bytes(value: str, unit: str) -> float:
     return v * UNIT_SCALE.get(unit.strip(), 1.0)
 
 
-def aggregate(rows: list[dict]) -> dict[str, dict[str, float]]:
+def aggregate(rows: list[dict], kernel_map=KERNEL_MAP) -> dict[str, dict[str, float]]:
     """Sum each metric per ladder kernel. Several launches of the same kernel (e.g. the
     naive composition's elementwise ops) accumulate into one entry."""
     out: dict[str, dict[str, float]] = {}
     for r in rows:
-        name = classify(r.get("Kernel Name", ""))
+        name = classify(r.get("Kernel Name", ""), kernel_map)
         if name is None:
             continue
         metric = r.get("Metric Name", "").strip()
@@ -140,6 +158,8 @@ def main() -> int:
                     help="ncu --csv output files, named ncu_<N>x<D>.csv")
     ap.add_argument("--analytic", action="store_true",
                     help="Plan B: derive bytes from the model instead of counters")
+    ap.add_argument("--variants", action="store_true",
+                    help="with --analytic: emit v2a/v2b/v2c rows instead of v2")
     ap.add_argument("--shapes", default="4096x1024,4096x8192",
                     help="shapes to emit in --analytic mode")
     ap.add_argument("--summary", default=str(RESULTS / "summary.csv"),
@@ -183,7 +203,7 @@ def main() -> int:
         print("Plan B: bytes DERIVED from the algorithm, not measured. Say so in the README.")
         for token in args.shapes.split(","):
             n, d = (int(v) for v in token.lower().strip().split("x"))
-            for kernel in ("v0", "v1", "v2", "torch_softmax"):
+            for kernel in VARIANT_ORDER if args.variants else LADDER_ORDER:
                 pred = predicted_bytes(kernel, n, d)
                 if pred is None:
                     continue
@@ -206,10 +226,14 @@ def main() -> int:
                 print(f"skipping {path}: filename does not contain <N>x<D>")
                 continue
             n, d = shape
-            agg = aggregate(read_ncu_csv(path))
+            # "variants" in the filename selects the attribution mapping. scripts/
+            # profile.sh writes ncu_variants_<N>x<D>.csv for those runs.
+            variants = "variant" in path.name
+            agg = aggregate(read_ncu_csv(path),
+                            VARIANT_KERNEL_MAP if variants else KERNEL_MAP)
             if not agg:
                 print(f"warning: {path} contained no recognized kernels")
-            for kernel in ("v0", "v1", "v2", "torch_softmax"):
+            for kernel in (VARIANT_ORDER if variants else LADDER_ORDER):
                 if kernel in agg:
                     a = agg[kernel]
                     emit(n, d, kernel, a["read"], a["write"], a["l2"], a["launches"], "measured")

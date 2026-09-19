@@ -95,6 +95,7 @@ the whole comparison.
 
 ```bash
 make bench                     # ~2 min: 5 functions × 2 shapes × 250 launches
+make bench-variants            # add v2a/v2b/v2c to that run (phase 5 attribution)
 ```
 
 Writes `results/summary.csv`, `results/env.json`, and one file per measurement in
@@ -104,8 +105,16 @@ or something else is on the GPU.
 
 ```bash
 make profile                   # ncu, one launch per kernel per shape
+make profile-variants          # same, for the v2a/v2b/v2c attribution
 make bytes                     # -> results/bytes.csv, and prints the table
 ```
+
+The attribution counters go in a **separate** ncu run, writing
+`results/raw/ncu_variants_<N>x<D>.csv`. That is not tidiness: `v2` dispatches to the
+same CUDA kernels as `v2b` and `v2c`, so profiling them together leaves rows that cannot
+be told apart by kernel name, and their counters would be summed into one wrong row.
+`profile_one.py` refuses the ambiguous combination rather than producing it, and the
+`ncu_variants_` prefix is what tells `parse_ncu.py` which mapping to apply.
 
 `scripts/profile.sh` points `ncu` at `bench/profile_one.py`, which issues exactly one
 launch per kernel. Never point `ncu` at the benchmark loop: it instruments every launch,

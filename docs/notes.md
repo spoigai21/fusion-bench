@@ -102,7 +102,8 @@ interesting claim than "v2 is faster than v1", and the three rows are what test 
 | Measured time at 4096×8192 | | | |
 | Verdict | | | |
 
-Run with `python bench/run_all.py --variants`. v2c refuses shapes it cannot vectorize
+Run with `make bench-variants` for the timings and `make profile-variants` for the
+counters that test the traffic column above. v2c refuses shapes it cannot vectorize
 rather than falling back to v2b, so a variant row can never silently measure a
 different kernel than the one it names.
 

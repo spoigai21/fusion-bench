@@ -26,7 +26,7 @@ import torch  # noqa: E402
 
 from bench.baselines import naive_composition, torch_softmax  # noqa: E402
 from bench.harness import make_input  # noqa: E402
-from bench.kernels import KERNELS, v2_path  # noqa: E402
+from bench.kernels import ALL_KERNELS, v2_path  # noqa: E402
 
 
 def log(msg: str) -> None:
@@ -38,7 +38,9 @@ def main() -> int:
     ap.add_argument("--shape", default="4096x8192", help="NxD")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--kernels", default="v0,v1,v2",
-                    help="comma-separated subset of v0,v1,v2")
+                    help="comma-separated subset of v0,v1,v2,v2a,v2b,v2c. Do not mix v2 "
+                         "with v2b/v2c in one run: v2 dispatches to those same kernels, "
+                         "so ncu could not tell the rows apart by name.")
     ap.add_argument("--with-torch", action="store_true",
                     help="also launch torch.softmax (adds a row to the ncu output)")
     ap.add_argument("--with-naive", action="store_true",
@@ -49,6 +51,12 @@ def main() -> int:
         log("CUDA not available")
         return 2
 
+    requested = [k.strip() for k in args.kernels.split(",") if k.strip()]
+    if "v2" in requested and ({"v2b", "v2c"} & set(requested)):
+        log("refusing: v2 dispatches to the same kernels as v2b/v2c, so their ncu rows "
+            "would be indistinguishable. Profile them in separate runs.")
+        return 2
+
     n, d = (int(v) for v in args.shape.lower().split("x"))
     x = make_input(n, d, seed=args.seed)
     torch.cuda.synchronize()
@@ -56,12 +64,12 @@ def main() -> int:
 
     # Exactly one launch each, in ladder order, so the ncu rows come back in a known
     # sequence even if the kernel names are mangled.
-    for name in args.kernels.split(","):
-        name = name.strip()
-        if not name:
-            continue
+    for name in requested:
+        if name not in ALL_KERNELS:
+            log(f"unknown kernel {name!r}; known: {', '.join(ALL_KERNELS)}")
+            return 2
         log(f"  launching {name}")
-        KERNELS[name](x)
+        ALL_KERNELS[name](x)
         torch.cuda.synchronize()
 
     if args.with_torch:

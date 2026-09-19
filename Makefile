@@ -7,6 +7,7 @@
 #   make bench      timings   -> results/summary.csv   (phase 6)
 #   make bench-variants  also time v2a/v2b/v2c (phase 5 attribution)
 #   make profile    counters  -> results/raw/ncu_*.csv (phase 6)
+#   make profile-variants  also counters for v2a/v2b/v2c
 #   make bytes      byte table -> results/bytes.csv
 #   make plot       chart     -> results/plots/
 #   make all        verify + bench + profile + bytes + plot
@@ -16,7 +17,7 @@ PYTHON ?= python
 comma := ,
 SHAPES ?= 4096x1024,4096x8192
 
-.PHONY: sim phase0 build verify bench bench-variants profile bytes analytic plot all quick clean distclean
+.PHONY: sim phase0 build verify bench bench-variants profile profile-variants bytes analytic plot all quick clean distclean
 
 sim:
 	$(PYTHON) tests/sim_logic.py
@@ -41,6 +42,9 @@ quick:
 
 profile:
 	bash scripts/profile.sh $(subst $(comma), ,$(SHAPES))
+
+profile-variants:
+	WITH_VARIANTS=1 bash scripts/profile.sh $(subst $(comma), ,$(SHAPES))
 
 bytes:
 	$(PYTHON) bench/parse_ncu.py

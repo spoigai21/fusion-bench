@@ -31,7 +31,8 @@ a measurement of fusion alone, not fusion confounded with access pattern.
 Phase 5's three changes are also kept as separate kernels — `v2a` (online pass only),
 `v2b` (`+` warp shuffles), `v2c` (`+` `float4` and register residency) — so the rung-2
 win can be attributed to the change that produced it rather than to all three at once.
-`make bench-variants` times them and draws a second chart. The prediction, recorded
+`make bench-variants` times them, `make profile-variants` gets their counters, and a
+second chart is drawn automatically. The prediction, recorded
 before measuring, is that **v2a loses to v1** and almost all of v2's win is v2c's
 register residency; see [`docs/notes.md`](docs/notes.md).
 
@@ -147,7 +148,7 @@ make verify
 make bench
 
 # 4. counters -> results/raw/ncu_*.csv -> results/bytes.csv
-make profile && make bytes
+make profile && make profile-variants && make bytes
 
 # 5. chart -> results/plots/
 make plot

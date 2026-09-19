@@ -8,6 +8,7 @@
 #   bash scripts/profile.sh                       # both shapes
 #   bash scripts/profile.sh 4096x8192             # one shape
 #   WITH_TORCH=1 bash scripts/profile.sh          # include torch.softmax's counters
+#   WITH_VARIANTS=1 bash scripts/profile.sh       # also the v2a/v2b/v2c byte table
 #
 # lts__t_bytes.sum (L2 traffic) is captured alongside the DRAM metrics on purpose: at
 # 4096x1024 the working set fits in the A100's 40 MB L2, so v0's extra passes hit L2
@@ -35,6 +36,20 @@ for shape in $SHAPES; do
       --csv \
       python bench/profile_one.py --shape "$shape" $EXTRA > "$out"
   echo "  $(grep -c . "$out") lines"
+
+  # The attribution ladder goes in a SEPARATE run: v2 dispatches to the same CUDA
+  # kernels as v2b and v2c, so profiling them together would leave ncu rows that cannot
+  # be told apart by kernel name. The filename is what tells parse_ncu.py which mapping
+  # to use, so keep the ncu_variants_ prefix.
+  if [ "${WITH_VARIANTS:-0}" = "1" ]; then
+    vout="results/raw/ncu_variants_${shape}.csv"
+    echo "profiling $shape variants -> $vout"
+    ncu --metrics "$METRICS" \
+        --print-units base \
+        --csv \
+        python bench/profile_one.py --shape "$shape" --kernels v2a,v2b,v2c > "$vout"
+    echo "  $(grep -c . "$vout") lines"
+  fi
 done
 
 echo
