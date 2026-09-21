@@ -10,6 +10,7 @@
 #   make profile-variants  also counters for v2a/v2b/v2c
 #   make bytes      byte table -> results/bytes.csv
 #   make plot       chart     -> results/plots/
+#   make tables     fill the README tables from results/ (phase 6 checkpoint)
 #   make all        verify + bench + profile + bytes + plot
 #   make analytic   Plan B byte table, when counters are blocked
 
@@ -17,7 +18,7 @@ PYTHON ?= python
 comma := ,
 SHAPES ?= 4096x1024,4096x8192
 
-.PHONY: sim phase0 build verify bench bench-variants profile profile-variants bytes analytic plot all quick clean distclean
+.PHONY: sim phase0 build verify bench bench-variants profile profile-variants bytes analytic plot tables check-tables all quick clean distclean
 
 sim:
 	$(PYTHON) tests/sim_logic.py
@@ -55,9 +56,15 @@ analytic:
 plot:
 	$(PYTHON) bench/plot.py
 
+tables:
+	$(PYTHON) bench/make_tables.py
+
+check-tables:
+	$(PYTHON) bench/make_tables.py --check
+
 # The full pipeline times and profiles the attribution variants too, so every
 # counter row in bytes.csv has a timing to join against.
-all: verify bench-variants profile profile-variants bytes plot
+all: verify bench-variants profile profile-variants bytes plot tables
 
 clean:
 	rm -rf .build __pycache__ bench/__pycache__ tests/__pycache__

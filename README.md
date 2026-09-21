@@ -58,21 +58,45 @@ the same rescaling trick that makes FlashAttention work.
 50 warmup launches discarded, 200 timed launches, CUDA events, **median** (not best-of-N).
 p5/p95 in the table, every individual sample in `results/raw/`.
 
-| shape | v0 | v1 | v2 | `torch.softmax` | `torch.compile` |
+<!-- BEGIN:timings -->
+| shape | v0 | v1 | v2 | `torch_softmax` | `torch_compile` |
 |---|---|---|---|---|---|
 | 4096×1024 | — | — | — | — | — |
 | 4096×8192 | — | — | — | — | — |
+<!-- END:timings -->
+
+Every ratio the claim above rests on, computed from those medians rather than asserted:
+
+<!-- BEGIN:speedups -->
+| shape | v0 → v1 | v1 → v2 | v0 → v2 | v2 vs `torch.softmax` |
+|---|---|---|---|---|
+| 4096×1024 | — | — | — | — |
+| 4096×8192 | — | — | — | — |
+<!-- END:speedups -->
 
 ## The byte table
 
 Measured with `ncu --metrics dram__bytes_read.sum,dram__bytes_write.sum,lts__t_bytes.sum`
 against a single-shot script — one launch per kernel, never the benchmark loop.
 
-| shape | kernel | DRAM read | DRAM write | L2 total | × ideal | GB/s | % of peak |
-|---|---|---|---|---|---|---|---|
-| 4096×8192 | v0 | — | — | — | — | — | — |
-| 4096×8192 | v1 | — | — | — | — | — | — |
-| 4096×8192 | v2 | — | — | — | — | — | — |
+<!-- BEGIN:bytes -->
+| shape | kernel | DRAM read | DRAM write | L2 total | × ideal | GB/s | % of peak | source |
+|---|---|---|---|---|---|---|---|---|
+| 4096×8192 | v0 | — | — | — | — | — | — | — |
+| 4096×8192 | v1 | — | — | — | — | — | — | — |
+| 4096×8192 | v2 | — | — | — | — | — | — | — |
+<!-- END:bytes -->
+
+And the same counters for the attribution ladder, which is where the rung-2 claim is
+settled — v2a and v2b should show 1.5× ideal, v2c 1.0×:
+
+<!-- BEGIN:bytes-variants -->
+| shape | kernel | DRAM read | DRAM write | L2 total | × ideal | GB/s | % of peak | source |
+|---|---|---|---|---|---|---|---|---|
+| 4096×8192 | v2a | — | — | — | — | — | — | — |
+| 4096×8192 | v2b | — | — | — | — | — | — | — |
+| 4096×8192 | v2c | — | — | — | — | — | — | — |
+<!-- END:bytes-variants -->
 
 "Ideal" is one read plus one write of the tensor, the floor for any softmax. Achieved
 bandwidth is *measured* bytes divided by median time, expressed against the card's stated
@@ -156,6 +180,9 @@ make profile && make profile-variants && make bytes
 
 # 5. chart -> results/plots/
 make plot
+
+# 6. fill in every table in this README from the CSVs -- no number typed by hand
+make tables
 ```
 
 Total GPU time for the measurement run is under ten minutes. Develop on a cheap card and
@@ -172,15 +199,17 @@ too rather than leaving it ambiguous.
 Every generated CSV carries this block as comment lines above its header, because a
 number without its environment is not reproducible.
 
+<!-- BEGIN:environment -->
 | | |
 |---|---|
 | GPU | — |
-| Peak memory bandwidth | — (the basis for every "% of peak" figure) |
-| Driver / CUDA runtime | — |
+| Peak memory bandwidth | — — — |
+| Driver / CUDA runtime | — / — |
 | PyTorch | — |
-| Clocks | — (locked, or achieved per run) |
+| Clocks | — |
 | Timing | 50 warmup + 200 timed launches, CUDA events, median |
 | Git commit | — |
+<!-- END:environment -->
 
 ## Layout
 
@@ -191,6 +220,7 @@ src/
   softmax.h          launcher declarations (kernels.cu stays torch-free)
 bench/
   ext.py             JIT build via torch.utils.cpp_extension.load
+  make_tables.py     regenerates the tables in this file from results/
   kernels.py         the kernel registry — ladder and attribution variants
   harness.py         timing protocol — events, warmup, median, raw logging
   env.py             environment capture, written into every CSV header

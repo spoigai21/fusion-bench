@@ -128,8 +128,14 @@ make plot                      # -> results/plots/time.png and time_dark.png
 
 ## 6. Phase 7 — the write-up
 
-Fill in the README tables from `results/summary.csv` and `results/bytes.csv`. Every number
-in them is generated; none should be typed by hand. Then fill in the measurement and
+```bash
+make tables        # rewrites every table in README.md from results/
+```
+
+`bench/make_tables.py` splices the timings, speedups, byte tables and environment block
+into the regions marked `<!-- BEGIN:... -->` in README.md, so no number in the write-up
+is ever typed by hand. `make check-tables` exits non-zero if the README has drifted from
+`results/`, which is the thing to run before committing the final numbers. Then fill in the measurement and
 verdict rows in `docs/notes.md` — including the ones where the prediction was wrong.
 
 The write-up needs four things: the chart, the byte table, one sentence tying the speedup
