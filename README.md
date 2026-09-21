@@ -48,10 +48,26 @@ d_new = d_old · exp(m_old − m_new) + exp(x − m_new)
 
 the same rescaling trick that makes FlashAttention work.
 
-## The chart
+## The charts
+
+The claim itself: for each rung, the reduction in bytes moved beside the measured
+speedup. Equal pairs mean the speedup *is* the traffic reduction. A short orange bar
+beside a tall blue one means bytes were saved that did not buy any time — which is what
+4096×1024 is expected to show, because its working set fits in L2 and the reads v0
+"saved" were already cache hits.
+
+![traffic reduction vs measured speedup](results/plots/claim.png#gh-light-mode-only)
+![traffic reduction vs measured speedup](results/plots/claim_dark.png#gh-dark-mode-only)
+
+Median time per version, with the two torch references drawn as lines:
 
 ![median time per version](results/plots/time.png#gh-light-mode-only)
 ![median time per version](results/plots/time_dark.png#gh-dark-mode-only)
+
+And where v2's win actually comes from, one change per rung:
+
+![v2 attribution](results/plots/v2_attribution.png#gh-light-mode-only)
+![v2 attribution](results/plots/v2_attribution_dark.png#gh-dark-mode-only)
 
 ## Timings
 
@@ -229,7 +245,7 @@ bench/
   run_all.py         validate + time -> results/summary.csv
   profile_one.py     single-shot launches, for ncu only
   parse_ncu.py       ncu CSV -> results/bytes.csv
-  plot.py            chart -> results/plots/
+  plot.py            charts -> results/plots/ (claim, time, attribution)
 tests/
   verify.py          FP64 cross-check on the real kernels, all edge cases
   sim_logic.py       CPU simulation of the reduction logic — no GPU required

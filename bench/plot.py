@@ -39,6 +39,10 @@ LADDER_LABELS = {
 # v1 is the starting point of the breakdown: the question it answers is what each of
 # v2's three changes bought over the rung below it.
 ATTRIBUTION = ["v1", "v2a", "v2b", "v2c"]
+
+# The pairs the central claim is made about: for each, is the speedup equal to the
+# reduction in bytes moved?
+CLAIM_PAIRS = [("v0", "v1"), ("v1", "v2"), ("v0", "v2")]
 # Drawn as reference lines rather than bars: they are the bar to clear, not rungs.
 # Distinct dash patterns as well as distinct hues, so identity never rests on color.
 REFS = [
@@ -56,6 +60,90 @@ THEME = {
                  grid="#2c2c2a", axis="#383835",
                  series=("#3987e5", "#d95926", "#199e70")),
 }
+
+
+def load_bytes(path: Path) -> dict[tuple[int, int], dict[str, float]]:
+    """dram_total_bytes keyed by shape then kernel. Empty if the file is absent."""
+    if not path.exists():
+        return {}
+    lines = [ln for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    out: dict[tuple[int, int], dict[str, float]] = {}
+    for r in csv.DictReader(lines):
+        if r.get("dram_total_bytes"):
+            out.setdefault((int(r["n"]), int(r["d"])), {})[r["kernel"]] = float(
+                r["dram_total_bytes"])
+    return out
+
+
+def draw_claim(times, byte_data, mode: str, out: Path) -> Path:
+    """The thesis chart: traffic reduction beside measured speedup, for each rung.
+
+    Equal-height pairs mean the speedup is the traffic reduction and the model holds.
+    A short speedup bar next to a tall traffic bar means bytes were saved that did not
+    buy time -- which is what the 4096x1024 shape is expected to show, because its
+    working set fits in L2 and the 'saved' reads were already cache hits.
+    """
+    c = THEME[mode]
+    shapes = sorted(set(times) & set(byte_data))
+    fig, axes = plt.subplots(
+        1, len(shapes), figsize=(5.6 * len(shapes), 4.2), facecolor=c["surface"])
+    if len(shapes) == 1:
+        axes = [axes]
+
+    width = 0.34   # leaves a small gap between the paired bars
+    for ax, shape in zip(axes, shapes):
+        n, d = shape
+        t, b = times[shape], byte_data[shape]
+        labels, traffic, speedup = [], [], []
+        for a, bb in CLAIM_PAIRS:
+            if a in t and bb in t and a in b and bb in b and t[bb] and b[bb]:
+                labels.append(f"{a} → {bb}")
+                traffic.append(b[a] / b[bb])
+                speedup.append(t[a] / t[bb])
+
+        ax.set_facecolor(c["surface"])
+        x = list(range(len(labels)))
+        ax.bar([i - width / 2 for i in x], traffic, width, color=c["series"][0],
+               label="bytes moved: fewer by", zorder=3)
+        ax.bar([i + width / 2 for i in x], speedup, width, color=c["series"][1],
+               label="time: faster by", zorder=3)
+
+        top = max(traffic + speedup + [1.0])
+        for i, (tr, sp) in enumerate(zip(traffic, speedup)):
+            for off, v in ((-width / 2, tr), (width / 2, sp)):
+                ax.text(i + off, v + top * 0.02, f"{v:.2f}×", ha="center", va="bottom",
+                        color=c["ink"], fontsize=9.5, zorder=4)
+
+        # 1.0x is "no change at all" -- the line a bar has to clear to mean anything.
+        ax.axhline(1.0, color=c["axis"], linewidth=1, linestyle=(0, (4, 3)), zorder=1)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=10, color=c["ink2"])
+        ax.set_ylim(0, top * 1.22)
+        ax.tick_params(axis="y", colors=c["muted"], labelsize=9)
+        ax.tick_params(axis="x", length=0)
+        ax.set_ylabel("ratio (higher is better)", color=c["muted"], fontsize=9)
+        ax.set_title(f"{n}×{d}   ({n * d * 4 / 1e6:.1f} MB input)",
+                     color=c["ink"], fontsize=11, pad=10, loc="left")
+        ax.grid(axis="y", color=c["grid"], linewidth=0.8, zorder=0)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(c["axis"])
+
+    handles, lbls = axes[0].get_legend_handles_labels()
+    leg = fig.legend(handles, lbls, loc="lower center", ncol=2, frameon=False,
+                     fontsize=9.5, bbox_to_anchor=(0.5, -0.01))
+    for text in leg.get_texts():
+        text.set_color(c["ink2"])
+
+    fig.suptitle("Is the speedup the traffic reduction?  —  equal pairs mean yes",
+                 color=c["ink"], fontsize=13, x=0.012, ha="left", y=0.99)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.94))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=200, facecolor=c["surface"], bbox_inches="tight")
+    plt.close(fig)
+    return out
 
 
 def load_summary(path: Path) -> dict[tuple[int, int], dict[str, float]]:
@@ -146,6 +234,7 @@ def draw(data, mode: str, out: Path, bars: list[str] | None = None,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--summary", default=str(ROOT / "results" / "summary.csv"))
+    ap.add_argument("--bytes", default=str(ROOT / "results" / "bytes.csv"))
     ap.add_argument("--outdir", default=str(ROOT / "results" / "plots"))
     args = ap.parse_args()
 
@@ -157,6 +246,7 @@ def main() -> int:
     if not data:
         raise SystemExit(f"{path} has no timed rows")
 
+    byte_data = load_bytes(Path(args.bytes))
     outdir = Path(args.outdir)
     for mode in ("light", "dark"):
         suffix = "" if mode == "light" else "_dark"
@@ -172,6 +262,15 @@ def main() -> int:
                        bars=ATTRIBUTION,
                        title="Where v2's win comes from — one change per rung")
             print(f"wrote {out}")
+
+    # The claim chart needs both timings and counters, so it appears only once the
+    # profiler has run. Without it the project's central assertion has no picture.
+    if byte_data:
+        for mode in ("light", "dark"):
+            suffix = "" if mode == "light" else "_dark"
+            print(f"wrote {draw_claim(data, byte_data, mode, outdir / f'claim{suffix}.png')}")
+    else:
+        print("(no results/bytes.csv yet -- skipping the claim chart; run make profile)")
     return 0
 
 

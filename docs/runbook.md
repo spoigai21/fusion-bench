@@ -128,7 +128,7 @@ launch per kernel. Never point `ncu` at the benchmark loop: it instruments every
 so 200 iterations means 200 rows and a very slow run.
 
 ```bash
-make plot                      # -> results/plots/time.png and time_dark.png
+make plot                      # -> results/plots/ (claim, time, attribution; light + dark)
 ```
 
 ## 6. Phase 7 — the write-up
