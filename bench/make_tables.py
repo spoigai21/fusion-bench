@@ -106,6 +106,11 @@ def bytes_table(rows: list[dict], kernels: list[str]) -> str:
                 f"| {n}×{d} | {k} | {mb(r['dram_read_bytes'])} | {mb(r['dram_write_bytes'])} "
                 f"| {mb(r['l2_total_bytes'])} | {cell(r['dram_vs_ideal'], '×')} "
                 f"| {cell(r['dram_gbps'])} | {cell(r['pct_peak'], '%')} | {r['source']} |")
+    if len(out) == 2:
+        # bytes.csv exists but holds nothing for these kernels -- the realistic case is
+        # `make profile` without `make profile-variants`. Emit placeholders rather than
+        # a header with no body, which renders as a broken table.
+        out += [f"| 4096×8192 | {k} |" + " — |" * 7 for k in kernels]
     return "\n".join(out)
 
 
