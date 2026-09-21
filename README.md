@@ -8,10 +8,10 @@ The claim, in one sentence: **v1 moves N× fewer bytes than v0 and is N× faster
 speedup is the traffic reduction.** Everything in this repo exists to support or refute
 that sentence with data.
 
-> **Status: kernels and harness complete, numbers pending.** Both sources compile
-> without a GPU: `kernels.cu` for `sm_80` under real `nvcc` with zero register spills
-> (`scripts/nvcc_check.sh`), and `bindings.cpp` against real libtorch headers
-> (`scripts/torch_header_check.sh`). Everything below still needs a GPU. Every table below is
+> **Status: kernels and harness complete, numbers pending.** The extension compiles,
+> links and imports without a GPU — `scripts/build_check.sh` runs the real
+> `cpp_extension.load()` path in a container, and `scripts/nvcc_check.sh` reports
+> `sm_80` register usage (zero spills). Every number below still needs a GPU. Every table below is
 > generated from `results/summary.csv` and `results/bytes.csv`; the em dashes are filled
 > in by a single GPU run (see [Reproducing](#reproducing)). Predictions were written
 > down *before* profiling in [`docs/notes.md`](docs/notes.md) so they can be wrong in
@@ -236,7 +236,7 @@ tests/
 scripts/
   phase0_check.sh    GPU + counter access verification
   nvcc_check.sh      compile kernels.cu with real nvcc in Docker — no GPU needed
-  torch_header_check.sh  compile bindings.cpp against real libtorch headers
+  build_check.sh     compile + link + import the extension in Docker — no GPU needed
   profile.sh         the ncu invocation
   lock_clocks.sh     clock locking, if permitted
 docs/

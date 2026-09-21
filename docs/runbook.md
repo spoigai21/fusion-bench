@@ -11,7 +11,7 @@ Nothing here needs a GPU:
 ```bash
 make sim                               # simulate the reduction logic against FP64
 bash scripts/nvcc_check.sh             # compile kernels.cu with real nvcc (needs Docker)
-bash scripts/torch_header_check.sh     # compile bindings.cpp against real libtorch
+bash scripts/build_check.sh            # compile + link + import the extension for real
 python bench/bytes_model.py            # the predictions, printed
 python bench/parse_ncu.py --analytic   # what Plan B's table would look like
 ```
@@ -76,7 +76,12 @@ make build      # python -m bench.ext
 
 First run takes ~30–60 s of nvcc; after that it is cached in `.build/`. It compiles the
 extension, runs the copy kernel, and prints which v2 path each benchmark shape takes and
-how much shared memory v1 needs. If this hangs or errors, nothing downstream is worth
+how much shared memory v1 needs.
+
+The compile and link half of this has already been verified off-box by
+`scripts/build_check.sh`, so if it fails here the cause is almost certainly the
+environment — a CUDA/torch version mismatch or a missing toolkit — rather than the
+source. If this hangs or errors, nothing downstream is worth
 debugging yet.
 
 ## 4. Phase 2–5 — correctness
