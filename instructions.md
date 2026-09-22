@@ -16,22 +16,6 @@ The claim the project makes is one sentence: **v1 moves N× fewer bytes than v0 
 N× faster, so the speedup is the traffic reduction.** Everything below exists to support
 or refute that sentence with data.
 
-### Relationship to CUDA-SGEMM-Optimization
-
-That repo already contains a fused softmax kernel benchmarked against torch. This is not
-a rewrite of it. The delta:
-
-| Already exists there | What this project adds |
-|---|---|
-| One final fused kernel | A three-rung ladder, so the win is attributable |
-| Two-pass max/sum | Online softmax (single pass, running max) |
-| GB/s derived from timing | Measured `dram__bytes_*` from Nsight counters |
-| Counters unavailable on that box | Counter access verified before any code is written |
-| "~70–75% of HBM peak" asserted | Achieved bandwidth computed from measured traffic |
-
-If counters work here, backporting the byte table into the SGEMM repo's fused section is
-worth doing afterwards.
-
 ---
 
 ## Phase 0 — GPU access and counter access

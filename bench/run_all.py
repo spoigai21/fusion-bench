@@ -95,6 +95,17 @@ def main() -> int:
           f"mem {info.get('clocks_mem_clock', 'n/a')} "
           f"(max {info.get('clocks_mem_clock_max', 'n/a')})")
     print(f"throttle   : {info.get('clocks_throttle_reasons', 'n/a')}")
+
+    # Unlocked clocks are the most common reason a timing distribution is wider than the
+    # kernel actually is. Not fatal -- the median over 200 launches is robust, and p5/p95
+    # are logged so the spread is visible -- but it should be a decision, not an oversight.
+    app_clk = info.get("clocks_applications_graphics", "")
+    if app_clk and "N/A" not in app_clk:
+        print(f"clock lock : pinned at {app_clk}")
+    elif info.get("gpu", "").startswith("NVIDIA"):
+        print("clock lock : NOT LOCKED -- run 'sudo bash scripts/lock_clocks.sh' for a "
+              "tighter\n             distribution, or check p5/p95 before trusting the "
+              "medians")
     print(f"protocol   : {args.warmup} warmup + {args.iters} timed, CUDA events, median\n")
 
     fns = dict(KERNELS)

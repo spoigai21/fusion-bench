@@ -65,6 +65,42 @@ def timings_table(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+def headline_table(rows: list[dict], n: int, d: int) -> str:
+    """The ladder as a progression: each rung against the one below it.
+
+    Rung, absolute figure, speedup over the previous rung, and position against the
+    reference implementation.
+    """
+    out = ["| Rung | median | effective GB/s | % of HBM peak | Speedup vs prev | vs `torch.softmax` |",
+           "|---|---|---|---|---|---|"]
+    by = {r["kernel"]: r for r in rows if int(r["n"]) == n and int(r["d"]) == d}
+    if not by:
+        return "\n".join(out + ["| v0 | — | — | — | — | — |"])
+
+    tsm = by.get("torch_softmax", {}).get("median_us")
+    prev = None
+    order = [("v0", "`softmax_v0` naive"), ("v1", "`softmax_v1` fused"),
+             ("v2", "`softmax_v2` online"), ("torch_softmax", "`torch.softmax` (ATen)"),
+             ("torch_compile", "`torch.compile`"),
+             ("naive_composition", "naive composition (multi-kernel)")]
+    for key, label in order:
+        r = by.get(key)
+        if not r or not r.get("median_us"):
+            continue
+        us = float(r["median_us"])
+        # The reference rows are not rungs, so they get no "vs prev" figure.
+        is_rung = key in ("v0", "v1", "v2")
+        step = f"{prev / us:.2f}×" if (is_rung and prev) else "—"
+        vs_t = f"{float(tsm) / us:.2f}×" if tsm else "—"
+        bold = "**" if key == "v2" else ""
+        out.append(
+            f"| {label} | {bold}{us:,.1f} µs{bold} | {cell(r.get('effective_gbps'))} "
+            f"| {cell(r.get('effective_pct_peak'), '%')} | {bold}{step}{bold} | {bold}{vs_t}{bold} |")
+        if is_rung:
+            prev = us
+    return "\n".join(out)
+
+
 def speedup_table(rows: list[dict]) -> str:
     """Every ratio the write-up claims, computed rather than asserted."""
     out = ["| shape | v0 → v1 | v1 → v2 | v0 → v2 | v2 vs `torch.softmax` |",
@@ -143,6 +179,8 @@ def env_table() -> str:
 
 def render(summary: list[dict], byte_rows: list[dict]) -> dict[str, str]:
     return {
+        "headline-8192": headline_table(summary, 4096, 8192),
+        "headline-1024": headline_table(summary, 4096, 1024),
         "timings": timings_table(summary),
         "speedups": speedup_table(summary),
         "bytes": bytes_table(byte_rows, LADDER),
@@ -152,13 +190,15 @@ def render(summary: list[dict], byte_rows: list[dict]) -> dict[str, str]:
 
 
 def splice(text: str, name: str, block: str) -> tuple[str, bool]:
+    # Matches an empty region as well as a populated one, so a freshly added pair of
+    # markers fills in on the first run rather than being reported as missing.
     pattern = re.compile(
-        rf"(<!-- BEGIN:{re.escape(name)} -->\n).*?(\n<!-- END:{re.escape(name)} -->)",
+        rf"(<!-- BEGIN:{re.escape(name)} -->\n).*?(<!-- END:{re.escape(name)} -->)",
         re.S)
     if not pattern.search(text):
         print(f"warning: README has no <!-- BEGIN:{name} --> marker; skipping")
         return text, False
-    new = pattern.sub(lambda m: m.group(1) + block + m.group(2), text)
+    new = pattern.sub(lambda m: m.group(1) + block + "\n" + m.group(2), text)
     return new, new != text
 
 

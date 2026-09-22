@@ -64,6 +64,7 @@ def nvidia_smi_clocks() -> dict[str, str]:
         [
             "nvidia-smi",
             "--query-gpu=clocks.sm,clocks.max.sm,clocks.mem,clocks.max.mem,"
+            "clocks.applications.graphics,"
             "clocks_throttle_reasons.active,temperature.gpu,power.draw",
             "--format=csv,noheader",
             "-i",
@@ -78,6 +79,9 @@ def nvidia_smi_clocks() -> dict[str, str]:
         "sm_clock_max",
         "mem_clock",
         "mem_clock_max",
+        # "[N/A]" unless application clocks have been pinned -- the signal for whether
+        # scripts/lock_clocks.sh was run. Recorded so a distribution can be judged.
+        "applications_graphics",
         "throttle_reasons",
         "temp_c",
         "power_w",

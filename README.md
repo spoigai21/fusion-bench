@@ -1,4 +1,4 @@
-# fusion-bench
+# Fusion Bench
 
 Three softmax kernels forming a ladder — multi-pass, fused, single-pass — where each rung
 removes one source of memory traffic, and Nsight Compute counters show whether the
@@ -8,36 +8,49 @@ The claim, in one sentence: **v1 moves N× fewer bytes than v0 and is N× faster
 speedup is the traffic reduction.** Everything in this repo exists to support or refute
 that sentence with data.
 
-> **Status: kernels and harness complete, numbers pending.** The extension compiles,
-> links and imports without a GPU — `scripts/build_check.sh` runs the real
-> `cpp_extension.load()` path in a container, and `scripts/nvcc_check.sh` reports
-> `sm_80` register usage (zero spills). Every number below still needs a GPU. Every table below is
-> generated from `results/summary.csv` and `results/bytes.csv`; the em dashes are filled
-> in by a single GPU run (see [Reproducing](#reproducing)). Predictions were written
-> down *before* profiling in [`docs/notes.md`](docs/notes.md) so they can be wrong in
-> public.
+Run on an **A100-SXM4-40GB**. Every number below is generated from `results/` by
+`make tables`; none is typed by hand.
+
+## Headline result
+
+Forward softmax over the last dimension of a 4096×8192 FP32 tensor:
+
+<!-- BEGIN:headline-8192 -->
+| Rung | median | effective GB/s | % of HBM peak | Speedup vs prev | vs `torch.softmax` |
+|---|---|---|---|---|---|
+| `softmax_v0` naive | 373.8 µs | 718.2 | 46.2% | — | 0.65× |
+| `softmax_v1` fused | 223.2 µs | 1202.5 | 77.3% | 1.67× | 1.09× |
+| `softmax_v2` online | **209.9 µs** | 1278.8 | 82.2% | **1.06×** | **1.16×** |
+| `torch.softmax` (ATen) | 242.7 µs | 1106.1 | 71.1% | — | 1.00× |
+| `torch.compile` | 262.1 µs | 1024.0 | 65.9% | — | 0.93× |
+| naive composition (multi-kernel) | 885.8 µs | 303.1 | 19.5% | — | 0.27× |
+<!-- END:headline-8192 -->
+
+![traffic reduction vs measured speedup](results/plots/claim.png#gh-light-mode-only)
+![traffic reduction vs measured speedup](results/plots/claim_dark.png#gh-dark-mode-only)
+
+**v0 → v2 moved 1.82× fewer bytes and ran 1.78× faster — the speedup *is* the traffic
+reduction, within 2%.** That is the whole claim, measured with Nsight hardware counters
+rather than inferred from timing. The chart above is the test: blue is bytes saved,
+orange is time saved, and equal pairs mean the model holds.
+
+The left panel is the more interesting half. At 4096×1024 the model **inverts** — v1
+moves fewer bytes and runs *slower* — because the 16.8 MB working set fits in the A100's
+40 MB L2. [Where the model breaks](#where-the-model-breaks) has the counters.
 
 ---
 
-## The ladder
+## The ladder — one idea per rung
 
-| | what changed | global passes over the row | modelled bytes |
+| | what changed | global passes | modelled bytes |
 |---|---|---|---|
-| **v0** naive | max, sum, normalize as three separate passes, all from global memory | 3 read + 1 write | `16·N·D` |
+| **v0** naive | max, sum and normalize as three separate passes, all from global memory | 3 read + 1 write | `16·N·D` |
 | **v1** fused | the row is staged in shared memory once; both reductions run there | 1 read + 1 write | `8·N·D` |
 | **v2** online | one pass with a running max and running sum; warp-shuffle reductions; `float4` loads; the row stays in registers | 1 read + 1 write | `8·N·D` |
 
 v0 is deliberately bad but not *stupidly* bad: threads within a block read consecutive
-addresses, so its loads are already coalesced. That matters — it makes the v0 → v1 delta
-a measurement of fusion alone, not fusion confounded with access pattern.
-
-Phase 5's three changes are also kept as separate kernels — `v2a` (online pass only),
-`v2b` (`+` warp shuffles), `v2c` (`+` `float4` and register residency) — so the rung-2
-win can be attributed to the change that produced it rather than to all three at once.
-`make bench-variants` times them, `make profile-variants` gets their counters, and a
-second chart is drawn automatically. The prediction, recorded
-before measuring, is that **v2a loses to v1** and almost all of v2's win is v2c's
-register residency; see [`docs/notes.md`](docs/notes.md).
+addresses, so its loads are already coalesced. That makes the v0 → v1 delta a
+measurement of fusion alone, not fusion confounded with access pattern.
 
 v2's online update is Milakov & Gimelshein ([arXiv:1805.02867](https://arxiv.org/abs/1805.02867)):
 
@@ -48,26 +61,49 @@ d_new = d_old · exp(m_old − m_new) + exp(x − m_new)
 
 the same rescaling trick that makes FlashAttention work.
 
-## The charts
-
-The claim itself: for each rung, the reduction in bytes moved beside the measured
-speedup. Equal pairs mean the speedup *is* the traffic reduction. A short orange bar
-beside a tall blue one means bytes were saved that did not buy any time — which is what
-4096×1024 is expected to show, because its working set fits in L2 and the reads v0
-"saved" were already cache hits.
-
-![traffic reduction vs measured speedup](results/plots/claim.png#gh-light-mode-only)
-![traffic reduction vs measured speedup](results/plots/claim_dark.png#gh-dark-mode-only)
-
-Median time per version, with the two torch references drawn as lines:
-
 ![median time per version](results/plots/time.png#gh-light-mode-only)
 ![median time per version](results/plots/time_dark.png#gh-dark-mode-only)
 
-And where v2's win actually comes from, one change per rung:
+At the smaller shape the ordering changes completely:
+
+<!-- BEGIN:headline-1024 -->
+| Rung | median | effective GB/s | % of HBM peak | Speedup vs prev | vs `torch.softmax` |
+|---|---|---|---|---|---|
+| `softmax_v0` naive | 45.1 µs | 744.7 | 47.9% | — | 0.80× |
+| `softmax_v1` fused | 48.1 µs | 697.2 | 44.8% | 0.94× | 0.74× |
+| `softmax_v2` online | **33.8 µs** | 993.0 | 63.9% | **1.42×** | **1.06×** |
+| `torch.softmax` (ATen) | 35.8 µs | 936.2 | 60.2% | — | 1.00× |
+| `torch.compile` | 92.2 µs | 364.1 | 23.4% | — | 0.39× |
+| naive composition (multi-kernel) | 126.0 µs | 266.4 | 17.1% | — | 0.28× |
+<!-- END:headline-1024 -->
+
+## Where v2's win comes from
+
+v2 bundles three changes, so they are also kept as separate kernels — `v2a` (online pass
+only), `v2b` (`+` warp shuffles), `v2c` (`+` `float4` and register residency) — and timed
+and profiled independently. The prediction, [recorded before
+measuring](docs/notes.md), was that **v2a would lose to v1** and that almost all of the
+win would be v2c's register residency.
 
 ![v2 attribution](results/plots/v2_attribution.png#gh-light-mode-only)
 ![v2 attribution](results/plots/v2_attribution_dark.png#gh-dark-mode-only)
+
+| at 4096×8192 | median | DRAM vs v1 | vs v1 |
+|---|---|---|---|
+| v1 fused | 223.2 µs | 1.00× | 1.00× |
+| v2a online only | 300.0 µs | **1.51×** | 0.74× |
+| v2b `+` warp shuffle | 300.0 µs | 1.49× | 0.74× |
+| v2c `+` float4 + registers | **212.0 µs** | 1.00× | **1.05×** |
+
+The prediction held, including the unflattering part. **The online formulation on its own
+is a regression** — it gives up v1's staged row and has to re-read it, moving 1.51× the
+traffic against a predicted 1.5×. **Warp shuffles bought exactly nothing**: v2a and v2b
+are both 300.03 µs, identical to the microsecond. The entire rung-2 win is v2c's register
+residency, 300.0 → 212.0 µs.
+
+So the honest headline is *the win is register residency, not the online formulation* —
+with the online formulation being what **permits** it, since you cannot hold the row in
+registers and also make two passes over it.
 
 ## Timings
 
@@ -122,19 +158,38 @@ settled — v2a and v2b should show 1.5× ideal, v2c 1.0×:
 
 "Ideal" is one read plus one write of the tensor, the floor for any softmax. Achieved
 bandwidth is *measured* bytes divided by median time, expressed against the card's stated
-peak — state the SKU, because an A100 80GB PCIe (1935 GB/s) and an SXM4 (2039 GB/s) are
-not the same denominator.
+peak — this ran on an A100-SXM4-40GB at 1555 GB/s, which is the denominator for every
+"% of peak" figure here.
 
-## What the two shapes are for
+Two things the counters settle that timing alone could not. At 4096×8192, v0 read
+**333.9 MB where its three passes imply 402.7 MB** — L2 already absorbed ~17% of the
+re-reads even at a size well past the cache. And v2a/v2b measured **1.41×/1.39× ideal**
+against a predicted 1.50×, for the same reason.
 
-**4096×1024** is 16.8 MB in FP32 and fits inside the A100's 40 MB L2. v0's extra passes
-should mostly hit L2 rather than DRAM, so the DRAM counters will show far less traffic
-than the algorithm implies and the "N× fewer bytes, N× faster" relationship is expected
-to *break* here. That is why `lts__t_bytes.sum` is captured alongside the DRAM metrics:
-the claim is that the traffic reduction is real but happens one level up the hierarchy,
-and an L2 counter demonstrates that where an argument would only assert it.
+## Where the model breaks
 
-**4096×8192** is 134 MB, well past L2, and is where the model should hold.
+**4096×1024 is 16.8 MB in FP32 and fits inside the A100's 40 MB L2**, and the result is
+not a weaker correlation — it is an inverted one. v1 moves 1.11× fewer bytes than v0 and
+runs **0.94×, slower**.
+
+The counters show why, which is exactly what `lts__t_bytes.sum` was captured for:
+
+| at 4096×1024 | DRAM total | L2 total | × ideal |
+|---|---|---|---|
+| v0 | 20.6 MB | 54.8 MB | 0.61× |
+| v1 | 18.5 MB | 55.3 MB | 0.55× |
+
+v0 moved 20.6 MB of DRAM traffic, not the 67 MB its three passes imply. Both kernels sit
+**below even the one-read-one-write floor** — 0.61× and 0.55× of "ideal" — because L2
+absorbs the writes too, and the L2 column carries roughly 2.7× the DRAM traffic. The
+reads v1 "saved" were already cache hits, so it paid for shared-memory staging and got
+nothing back for it.
+
+**A traffic model that ignores the cache hierarchy predicts the wrong sign here, not
+merely the wrong magnitude.** That is the most useful thing in this repository, and it is
+why the small shape was kept rather than quietly dropped.
+
+**4096×8192** is 134 MB, well past L2, and is where the model holds.
 
 ## Verdict
 
@@ -257,7 +312,7 @@ them), `make analytic` derives the byte table from the algorithm instead. That i
 evidence and the table is labelled `derived` in its `source` column — say so plainly here
 too rather than leaving it ambiguous.
 
-## Environment
+## Hardware these numbers came from
 
 Every generated CSV carries this block as comment lines above its header, because a
 number without its environment is not reproducible.
@@ -306,23 +361,6 @@ docs/
   notes.md           prediction, measurement, verdict per rung
   runbook.md         the GPU session, start to finish
 ```
-
-## Relationship to CUDA-SGEMM-Optimization
-
-[That repo](https://github.com/Sanjith-Shan/CUDA-SGEMM-Optimization) already contains a
-fused, `float4`-vectorized softmax kernel benchmarked against torch. This is not a
-rewrite of it. The delta:
-
-| already exists there | what this adds |
-|---|---|
-| one final fused kernel | a three-rung ladder, so the win is attributable |
-| two-pass max/sum | online softmax — single pass, running max |
-| GB/s derived from timing | measured `dram__bytes_*` from Nsight counters |
-| counters unavailable on that box | counter access verified before any code was written |
-| "~70–75% of HBM peak" asserted | achieved bandwidth computed from measured traffic |
-
-If the counters work here, backporting the byte table into that repo's fused section is
-worth doing afterwards.
 
 ## References
 
