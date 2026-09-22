@@ -1,0 +1,12 @@
+==PROF== Connected to process 6812 (/usr/bin/python3.10)
+==PROF== Disconnected from process 6812
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","6812","python3.10","127.0.0.1","<unnamed>::softmax_v0_kernel(const float *, float *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","dram__bytes_read.sum","byte","333922432"
+"0","6812","python3.10","127.0.0.1","<unnamed>::softmax_v0_kernel(const float *, float *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","dram__bytes_write.sum","byte","121007488"
+"0","6812","python3.10","127.0.0.1","<unnamed>::softmax_v0_kernel(const float *, float *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","lts__t_bytes.sum","byte","995778752"
+"1","6812","python3.10","127.0.0.1","<unnamed>::softmax_v1_kernel(const float *, float *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","dram__bytes_read.sum","byte","134231424"
+"1","6812","python3.10","127.0.0.1","<unnamed>::softmax_v1_kernel(const float *, float *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","dram__bytes_write.sum","byte","116226432"
+"1","6812","python3.10","127.0.0.1","<unnamed>::softmax_v1_kernel(const float *, float *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","lts__t_bytes.sum","byte","525521856"
+"2","6812","python3.10","127.0.0.1","void <unnamed>::softmax_v2_vec_kernel<8>(const float4 *, float4 *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","dram__bytes_read.sum","byte","134235136"
+"2","6812","python3.10","127.0.0.1","void <unnamed>::softmax_v2_vec_kernel<8>(const float4 *, float4 *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","dram__bytes_write.sum","byte","115773696"
+"2","6812","python3.10","127.0.0.1","void <unnamed>::softmax_v2_vec_kernel<8>(const float4 *, float4 *, int)","1","7","(256, 1, 1)","(4096, 1, 1)","0","8.0","Command line profiler metrics","lts__t_bytes.sum","byte","525471616"

@@ -3,3 +3,7 @@
 torch>=2.1
 numpy>=1.24
 matplotlib>=3.7
+# Required by torch.utils.cpp_extension.load -- without it the extension will not
+# build, with the error "Ninja is required to load C++ extensions". Not always present
+# in GPU images (Lambda Stack 22.04 ships without it).
+ninja>=1.11

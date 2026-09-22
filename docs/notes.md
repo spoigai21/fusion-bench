@@ -55,9 +55,9 @@ table measures total traffic, so 2× is the number to compare the speedup agains
 | Predicted traffic ratio | 2.00× |
 | Predicted speedup at 4096×8192 | **< 2×**, because v0's re-reads partly hit L2 even at this size, and because v1's 32 KB/block shared memory holds occupancy to ~1 block/SM |
 | Predicted speedup at 4096×1024 | **well under 2×** — the 16.8 MB working set fits inside the A100's 40 MB L2, so v0's extra passes are L2 hits, not DRAM traffic |
-| Measured traffic ratio | _(fill in from results/bytes.csv)_ |
-| Measured speedup | _(fill in from results/summary.csv)_ |
-| Verdict | |
+| Measured traffic ratio | **1.82×** at 4096×8192; **1.11×** at 4096×1024 |
+| Measured speedup | **1.67×** at 4096×8192; **0.94× — slower** at 4096×1024 |
+| Verdict | **Holds at the large shape, within 9%.** Inverts at the small one: v1 moves fewer bytes and takes more time. v0's DRAM traffic there was 20.6 MB against the 67 MB its three passes imply, because the 16.8 MB input lives in L2 (54.8 MB of L2 traffic). The saved reads were cache hits, so v1 bought nothing and still paid for shared-memory staging. The prediction that this shape would break the model was right; the prediction understated it, since the sign flips rather than the magnitude shrinking. |
 
 ### Rung 2 — v1 → v2
 
@@ -66,9 +66,9 @@ table measures total traffic, so 2× is the number to compare the speedup agains
 | Predicted traffic ratio | 1.00× — same bytes |
 | Predicted speedup at 4096×8192 | 1.1–1.4×. Revised down after the `ptxas` numbers: occupancy is equal (50% both ways), so the only levers left are the `float4` loads and skipping v1's shared-memory round trip |
 | Predicted speedup at 4096×1024 | small, maybe none. At `D = 1024` v1 needs only 4 KB/block, so the occupancy argument barely applies |
-| Measured traffic ratio | |
-| Measured speedup | |
-| Verdict | |
+| Measured traffic ratio | **1.00×** at 4096×8192; **1.01×** at 4096×1024 — as predicted, no traffic win |
+| Measured speedup | **1.06×** at 4096×8192; **1.42×** at 4096×1024 |
+| Verdict | Traffic prediction exactly right. The 1.06× at the large shape sits inside the corrected 1.1–1.4× band (just under it), and is *not* explained by occupancy — see below. The 1.42× at 4096×1024 is the most interesting number in the run: identical DRAM traffic, 42% faster. Time and bytes decouple completely there, and the cause has to be register residency and `float4` loads avoiding L2 round trips. |
 
 ### Rung 2, broken down — v2a → v2b → v2c
 
@@ -102,9 +102,15 @@ interesting claim than "v2 is faster than v1", and the three rows are what test 
 
 | | v2a | v2b | v2c |
 |---|---|---|---|
-| Measured traffic vs v1 | | | |
-| Measured time at 4096×8192 | | | |
-| Verdict | | | |
+| Measured traffic vs v1 | **1.51×** | **1.49×** | **1.00×** |
+| Measured time at 4096×8192 | **300.03 µs** (0.74× v1) | **300.03 µs** (0.74× v1) | **211.97 µs** (1.05× v1) |
+| Verdict | **Predicted to lose to v1, and it does.** Predicted 1.5× the traffic; measured 1.51×. | **Warp shuffles bought exactly nothing** — identical to v2a to the microsecond. Predicted 1.0–1.15×; measured 1.00×. | **The entire rung-2 win.** 300.0 → 212.0 µs is 1.42×, against a predicted ≥1.5×. |
+
+**The uncomfortable prediction was correct.** The online formulation on its own is a
+regression against v1, because it gives up the staged row and has to re-read it. The
+warp-shuffle reduction — the change that looks most like "real" CUDA optimisation — is
+worth nothing at all here. Everything is the register residency, which the online
+formulation exists to permit rather than to deliver by itself.
 
 Run with `make bench-variants` for the timings and `make profile-variants` for the
 counters that test the traffic column above. v2c refuses shapes it cannot vectorize
@@ -209,4 +215,15 @@ _One line per run: date, GPU, git commit, what changed, what moved._
 
 | date | GPU | commit | change | result |
 |---|---|---|---|---|
-| | | | | |
+| 2026-09-21 | A100-SXM4-40GB (1555 GB/s), driver 580.105.08, torch 2.7.0 / CUDA 12.8 | `dfac770-dirty` | first and only measurement run; 50 warmup + 200 timed, clocks not locked | All 18 timings passed FP64 at 1e-5. v0→v2 = 1.82× bytes / 1.78× time at 4096×8192. Model inverts at 4096×1024. v2 beats `torch.softmax` 1.16× / 1.06×. |
+
+**Environment notes for a rerun.** Lambda Stack 22.04 needed three things it did not
+ship: `nsight-compute` (via NVIDIA's apt repo), `ninja-build`, and `pybind11-dev` —
+Lambda's Debian-packaged torch strips the bundled pybind11 headers. Counters returned
+`ERR_NVGPUCTRPERM` for the normal user and worked under `sudo`, which is why
+`scripts/profile.sh` takes `NCU_SUDO=1`. Clocks were left unlocked; p5/p95 spreads came
+in within about ±2% of the median, so the medians look sound, but a rerun that locks
+them would be tighter.
+
+The `-dirty` suffix on the commit is accurate: the profiling scripts had uncommitted
+changes (the `NCU_SUDO` path) when the numbers were produced.

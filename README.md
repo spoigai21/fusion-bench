@@ -77,8 +77,8 @@ p5/p95 in the table, every individual sample in `results/raw/`.
 <!-- BEGIN:timings -->
 | shape | v0 | v1 | v2 | `torch_softmax` | `torch_compile` |
 |---|---|---|---|---|---|
-| 4096×1024 | — | — | — | — | — |
-| 4096×8192 | — | — | — | — | — |
+| 4096×1024 | 45 µs | 48 µs | 34 µs | 36 µs | 92 µs |
+| 4096×8192 | 374 µs | 223 µs | 210 µs | 243 µs | 262 µs |
 <!-- END:timings -->
 
 Every ratio the claim above rests on, computed from those medians rather than asserted:
@@ -86,8 +86,8 @@ Every ratio the claim above rests on, computed from those medians rather than as
 <!-- BEGIN:speedups -->
 | shape | v0 → v1 | v1 → v2 | v0 → v2 | v2 vs `torch.softmax` |
 |---|---|---|---|---|
-| 4096×1024 | — | — | — | — |
-| 4096×8192 | — | — | — | — |
+| 4096×1024 | 0.94× | 1.42× | 1.33× | 1.06× |
+| 4096×8192 | 1.67× | 1.06× | 1.78× | 1.16× |
 <!-- END:speedups -->
 
 ## The byte table
@@ -98,9 +98,12 @@ against a single-shot script — one launch per kernel, never the benchmark loop
 <!-- BEGIN:bytes -->
 | shape | kernel | DRAM read | DRAM write | L2 total | × ideal | GB/s | % of peak | source |
 |---|---|---|---|---|---|---|---|---|
-| 4096×8192 | v0 | — | — | — | — | — | — | — |
-| 4096×8192 | v1 | — | — | — | — | — | — | — |
-| 4096×8192 | v2 | — | — | — | — | — | — | — |
+| 4096×1024 | v0 | 16.8 MB | 3.8 MB | 54.8 MB | 0.61× | 457.4 | 29.4% | measured |
+| 4096×1024 | v1 | 16.8 MB | 1.7 MB | 55.3 MB | 0.55× | 385.0 | 24.8% | measured |
+| 4096×1024 | v2 | 16.8 MB | 1.6 MB | 55.3 MB | 0.55× | 545.3 | 35.1% | measured |
+| 4096×8192 | v0 | 333.9 MB | 121.0 MB | 995.8 MB | 1.69× | 1217.2 | 78.3% | measured |
+| 4096×8192 | v1 | 134.2 MB | 116.2 MB | 525.5 MB | 0.93× | 1122.0 | 72.2% | measured |
+| 4096×8192 | v2 | 134.2 MB | 115.8 MB | 525.5 MB | 0.93× | 1191.0 | 76.6% | measured |
 <!-- END:bytes -->
 
 And the same counters for the attribution ladder, which is where the rung-2 claim is
@@ -109,9 +112,12 @@ settled — v2a and v2b should show 1.5× ideal, v2c 1.0×:
 <!-- BEGIN:bytes-variants -->
 | shape | kernel | DRAM read | DRAM write | L2 total | × ideal | GB/s | % of peak | source |
 |---|---|---|---|---|---|---|---|---|
-| 4096×8192 | v2a | — | — | — | — | — | — | — |
-| 4096×8192 | v2b | — | — | — | — | — | — | — |
-| 4096×8192 | v2c | — | — | — | — | — | — | — |
+| 4096×1024 | v2a | 16.8 MB | 3.9 MB | 57.8 MB | 0.62× | 531.8 | 34.2% | measured |
+| 4096×1024 | v2b | 16.8 MB | 1.8 MB | 55.9 MB | 0.55× | 502.8 | 32.3% | measured |
+| 4096×1024 | v2c | 16.8 MB | 1.6 MB | 55.3 MB | 0.55× | 545.0 | 35.0% | measured |
+| 4096×8192 | v2a | 256.3 MB | 121.2 MB | 783.8 MB | 1.41× | 1257.9 | 80.9% | measured |
+| 4096×8192 | v2b | 254.7 MB | 119.0 MB | 782.4 MB | 1.39× | 1245.3 | 80.1% | measured |
+| 4096×8192 | v2c | 134.2 MB | 115.8 MB | 525.3 MB | 0.93× | 1179.7 | 75.9% | measured |
 <!-- END:bytes-variants -->
 
 "Ideal" is one read plus one write of the tensor, the floor for any softmax. Achieved
@@ -132,8 +138,42 @@ and an L2 counter demonstrates that where an argument would only assert it.
 
 ## Verdict
 
-— *(one sentence tying the speedup to the traffic reduction, or explaining why it does
-not hold at the small shape)*
+**At 4096×8192, v0 → v2 moved 1.82× fewer bytes and ran 1.78× faster — the speedup is
+the traffic reduction, within 2%.** v0 → v1 is the same story at 1.82× versus 1.67×.
+That is the claim this project set out to test, measured with hardware counters rather
+than inferred from timing, and it holds.
+
+**At 4096×1024 the model does not merely weaken — it inverts.** v1 moves 1.11× fewer
+bytes than v0 and runs *slower*, 0.94×. The counters say why: v0 moved 20.6 MB of DRAM
+traffic, not the 67 MB its three passes imply, because the 16.8 MB input fits inside the
+A100's 40 MB L2 (54.8 MB of L2 traffic against 20.6 MB of DRAM). Both kernels are below
+even the 1-read-1-write floor — 0.61× and 0.55× of "ideal" — because the cache absorbs
+the writes too. The reads v1 "saved" were already cache hits, so it paid for
+shared-memory staging and got nothing back. **A traffic model that ignores the cache
+hierarchy predicts the wrong sign here, not just the wrong magnitude.**
+
+The sharpest case is v1 → v2 at that shape: **identical DRAM traffic (1.01×) and 1.42×
+faster.** Time and bytes decouple completely. Whatever v2 wins there, it is not
+bandwidth — it is register residency and `float4` loads avoiding L2 round trips.
+
+On the attribution, the prediction recorded in [`docs/notes.md`](docs/notes.md) before
+profiling was right, including the part that was unflattering to the design: **v2a, the
+online formulation on its own, loses to v1** (300.0 µs vs 223.2 µs) because it re-reads
+the row to normalise and moves 1.51× the traffic. Adding warp shuffles bought **exactly
+nothing** — v2a and v2b are both 300.03 µs. The entire rung-2 win is v2c's register
+residency, 300.0 → 212.0 µs. The honest headline is *the win is register residency, not
+the online formulation* — with the online formulation being what permits it, since you
+cannot hold the row in registers and also make two passes over it.
+
+One prediction was wrong and is worth stating plainly. An earlier version of `notes.md`
+claimed v1 → v2 would be an occupancy win; reading real `ptxas` output beforehand showed
+both sit at 50% occupancy at `D = 8192`, and the correction is in the file. The measured
+1.06× at that shape is consistent with the corrected prediction, not the original one.
+
+Against the real bar: **v2 beats `torch.softmax` by 1.16× at 4096×8192 and 1.06× at
+4096×1024**, and beats the naive multi-kernel composition by 4.2×. That is a narrower
+win than the headline numbers suggest, and it is forward-only FP32 on two shapes — see
+Limitations.
 
 ## Limitations
 
@@ -225,13 +265,13 @@ number without its environment is not reproducible.
 <!-- BEGIN:environment -->
 | | |
 |---|---|
-| GPU | — |
-| Peak memory bandwidth | — — — |
-| Driver / CUDA runtime | — / — |
-| PyTorch | — |
-| Clocks | — |
+| GPU | NVIDIA A100-SXM4-40GB, 42.4 GB |
+| Peak memory bandwidth | 1555.0 GB/s — table lookup: A100-SXM4-40GB |
+| Driver / CUDA runtime | 580.105.08 / 12.8 |
+| PyTorch | 2.7.0 |
+| Clocks | SM 240 MHz (max 1410 MHz), mem 1215 MHz |
 | Timing | 50 warmup + 200 timed launches, CUDA events, median |
-| Git commit | — |
+| Git commit | dfac770-dirty |
 <!-- END:environment -->
 
 ## Layout

@@ -63,11 +63,18 @@ else
   tail -30 "$tmp"
   cat <<'HINT'
 
-  If this says "ERR_NVGPUCTRPERM" or "insufficient permissions", the container is
-  blocking counter access. Options, in order:
-    docker run --cap-add=SYS_ADMIN ...        (or RunPod: enable privileged mode)
-    a different provider / a bare-metal instance
-    Plan B: python bench/parse_ncu.py --analytic   (and say so in the README)
+  ERR_NVGPUCTRPERM means the driver is restricting counters to admin users
+  (NVreg_RestrictProfilingToAdminUsers=1, the default). In order:
+
+    1. If you have root -- a bare VM or bare metal -- just use sudo:
+         sudo $(command -v ncu) --metrics dram__bytes_read.sum ... python3 ...
+       and run the project's profiling with NCU_SUDO=1 bash scripts/profile.sh
+       This is what worked on Lambda and needs no reboot.
+    2. In a container: restart it with --cap-add=SYS_ADMIN (RunPod: privileged mode).
+    3. A different provider, or bare metal.
+    4. Plan B: python bench/parse_ncu.py --analytic   (and say so in the README)
+
+  A stale /tmp/nsight-compute-lock from a failed run blocks even root; delete it.
 HINT
 fi
 rm -f "$tmp"
