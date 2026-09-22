@@ -157,6 +157,13 @@ Two further caveats, stated rather than buried:
 Reference is NumPy **float64**, computed from the same fixed-seed input. Pass condition is
 max absolute error below `1e-5`. **A kernel that fails does not get timed.**
 
+Accuracy is a gate, not an achievement: every version computes the same answer, so the
+chart below exists to answer the obvious objection to a speedup — that precision was
+traded for it. Distance from the tolerance line is headroom.
+
+![accuracy headroom](results/plots/accuracy.png#gh-light-mode-only)
+![accuracy headroom](results/plots/accuracy_dark.png#gh-dark-mode-only)
+
 `tests/verify.py` covers the cases that actually break softmax kernels:
 
 | case | what it exercises |
@@ -245,7 +252,7 @@ bench/
   run_all.py         validate + time -> results/summary.csv
   profile_one.py     single-shot launches, for ncu only
   parse_ncu.py       ncu CSV -> results/bytes.csv
-  plot.py            charts -> results/plots/ (claim, time, attribution)
+  plot.py            charts -> results/plots/ (claim, time, attribution, accuracy)
 tests/
   verify.py          FP64 cross-check on the real kernels, all edge cases
   sim_logic.py       CPU simulation of the reduction logic — no GPU required

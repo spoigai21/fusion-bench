@@ -62,6 +62,78 @@ THEME = {
 }
 
 
+def load_errors(path: Path) -> dict[tuple[int, int], dict[str, float]]:
+    """max_abs_err keyed by shape then kernel."""
+    if not path.exists():
+        return {}
+    out: dict[tuple[int, int], dict[str, float]] = {}
+    lines = [ln for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    for r in csv.DictReader(lines):
+        if r.get("max_abs_err"):
+            try:
+                out.setdefault((int(r["n"]), int(r["d"])), {})[r["kernel"]] = float(
+                    r["max_abs_err"])
+            except ValueError:
+                pass
+    return out
+
+
+def draw_accuracy(errors, mode: str, out: Path, tol: float = 1e-5) -> Path:
+    """Accuracy is a gate, not an achievement: every version computes the same answer.
+
+    This chart exists to answer the obvious objection to a speedup -- that precision was
+    traded away for it. Distance between each marker and the tolerance line is the
+    headroom. Log scale, because the interesting fact is the order of magnitude.
+    """
+    c = THEME[mode]
+    order = [k for k in ("v0", "v1", "v2", "v2a", "v2b", "v2c", "torch_softmax")]
+    shapes = sorted(errors)
+    fig, axes = plt.subplots(
+        1, len(shapes), figsize=(5.6 * len(shapes), 3.8), facecolor=c["surface"])
+    if len(shapes) == 1:
+        axes = [axes]
+
+    for ax, shape in zip(axes, shapes):
+        n, d = shape
+        present = [k for k in order if k in errors[shape] and errors[shape][k] > 0]
+        vals = [errors[shape][k] for k in present]
+        ypos = list(range(len(present)))[::-1]
+
+        ax.set_facecolor(c["surface"])
+        # A lollipop rather than a bar: on a log axis a bar has no meaningful origin.
+        for y, v in zip(ypos, vals):
+            ax.plot([min(vals) / 10, v], [y, y], color=c["grid"], linewidth=1.5, zorder=2)
+        ax.scatter(vals, ypos, s=70, color=c["series"][0], zorder=3, clip_on=False)
+
+        ax.axvline(tol, color=c["series"][1], linewidth=2, linestyle=(0, (5, 3)), zorder=2)
+        ax.text(tol, len(present) - 0.35, f"  {tol:g} tolerance", color=c["ink2"],
+                fontsize=9, va="top", ha="left")
+
+        ax.set_xscale("log")
+        ax.set_xlim(min(vals) / 10, tol * 6)
+        ax.set_yticks(ypos)
+        ax.set_yticklabels([k.replace("torch_softmax", "torch.softmax") for k in present],
+                           fontsize=9.5, color=c["ink2"])
+        ax.tick_params(axis="x", colors=c["muted"], labelsize=9)
+        ax.tick_params(axis="y", length=0)
+        ax.set_xlabel("max absolute error vs float64 reference (log)",
+                      color=c["muted"], fontsize=9)
+        ax.set_title(f"{n}×{d}", color=c["ink"], fontsize=11, pad=10, loc="left")
+        ax.grid(axis="x", color=c["grid"], linewidth=0.8, zorder=0)
+        ax.set_axisbelow(True)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.spines["bottom"].set_color(c["axis"])
+
+    fig.suptitle("Accuracy is a gate, not a trade — every version clears it",
+                 color=c["ink"], fontsize=13, x=0.012, ha="left", y=0.99)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=200, facecolor=c["surface"], bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
 def load_bytes(path: Path) -> dict[tuple[int, int], dict[str, float]]:
     """dram_total_bytes keyed by shape then kernel. Empty if the file is absent."""
     if not path.exists():
@@ -247,6 +319,7 @@ def main() -> int:
         raise SystemExit(f"{path} has no timed rows")
 
     byte_data = load_bytes(Path(args.bytes))
+    errors = load_errors(path)
     outdir = Path(args.outdir)
     for mode in ("light", "dark"):
         suffix = "" if mode == "light" else "_dark"
@@ -271,6 +344,11 @@ def main() -> int:
             print(f"wrote {draw_claim(data, byte_data, mode, outdir / f'claim{suffix}.png')}")
     else:
         print("(no results/bytes.csv yet -- skipping the claim chart; run make profile)")
+
+    if errors:
+        for mode in ("light", "dark"):
+            suffix = "" if mode == "light" else "_dark"
+            print(f"wrote {draw_accuracy(errors, mode, outdir / f'accuracy{suffix}.png')}")
     return 0
 
 
